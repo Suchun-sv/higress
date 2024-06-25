@@ -4,8 +4,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/wrapper"
@@ -85,6 +87,17 @@ type RedisInfo struct {
 	Timeout int `required:"false" yaml:"timeout" json:"timeout"`
 }
 
+type DashVectorInfo struct {
+	DashScopeServiceName  string             `require:"true" yaml:"DashScopeServiceName" jaon:"DashScopeServiceName"`
+	DashScopeKey          string             `require:"true" yaml:"DashScopeKey" jaon:"DashScopeKey"`
+	DashVectorServiceName string             `require:"true" yaml:"DashVectorServiceName" jaon:"DashVectorServiceName"`
+	DashVectorKey         string             `require:"true" yaml:"DashVectorKey" jaon:"DashVectorKey"`
+	DashVectorAuthApiEnd  string             `require:"true" yaml:"DashVectorEnd" jaon:"DashVectorEnd"`
+	DashVectorCollection  string             `require:"true" yaml:"DashVectorCollection" jaon:"DashVectorCollection"`
+	DashVectorClient      wrapper.HttpClient `yaml:"-" json:"-"`
+	DashScopeClient       wrapper.HttpClient `yaml:"-" json:"-"`
+}
+
 type KVExtractor struct {
 	// @Title zh-CN 从请求 Body 中基于 [GJSON PATH](https://github.com/tidwall/gjson/blob/master/SYNTAX.md) 语法提取字符串
 	RequestBody string `required:"false" yaml:"requestBody" json:"requestBody"`
@@ -93,6 +106,9 @@ type KVExtractor struct {
 }
 
 type PluginConfig struct {
+	// @Title zh-CN DashVector 阿里云向量搜索引擎
+	// @Description zh-CN 调用阿里云的向量搜索引擎
+	DashVectorInfo DashVectorInfo `required:"true" yaml:"dashvector" json:"dashvector"`
 	// @Title zh-CN Redis 地址信息
 	// @Description zh-CN 用于存储缓存结果的 Redis 地址
 	RedisInfo RedisInfo `required:"true" yaml:"redis" json:"redis"`
@@ -120,7 +136,210 @@ type PluginConfig struct {
 	redisClient    wrapper.RedisClient `yaml:"-" json:"-"`
 }
 
+type Embedding struct {
+	Embedding []float64 `json:"embedding"`
+	TextIndex int       `json:"text_index"`
+}
+
+type Input struct {
+	Texts []string `json:"texts"`
+}
+
+type Params struct {
+	TextType string `json:"text_type"`
+}
+
+type Response struct {
+	RequestID string `json:"request_id"`
+	Output    Output `json:"output"`
+	Usage     Usage  `json:"usage"`
+}
+
+type Output struct {
+	Embeddings []Embedding `json:"embeddings"`
+}
+
+type Usage struct {
+	TotalTokens int `json:"total_tokens"`
+}
+
+// EmbeddingRequest 定义请求的数据结构
+type EmbeddingRequest struct {
+	Model      string `json:"model"`
+	Input      Input  `json:"input"`
+	Parameters Params `json:"parameters"`
+}
+
+// Document 定义每个文档的结构
+type Document struct {
+	ID     string            `json:"id"`
+	Vector []float64         `json:"vector"`
+	Fields map[string]string `json:"fields"`
+}
+
+// InsertRequest 定义插入请求的结构
+type InsertRequest struct {
+	Docs []Document `json:"docs"`
+}
+
+func vector_initialize(json gjson.Result, c *PluginConfig, log wrapper.Log) error {
+	// Define the request body and headers.
+	requestBody := []byte(`{"name":"higress_1536","dimension":1536}`)
+	requestHeaders := [][2]string{{"dashvector-auth-token", c.DashVectorInfo.DashVectorKey}}
+
+	// Make a POST request using DashVectorClient, which is assumed to implement HttpClient.
+	err := c.DashVectorInfo.DashVectorClient.Post(
+		c.DashVectorInfo.DashVectorAuthApiEnd,
+		requestHeaders,
+		requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			// Check the response status code.
+			if statusCode != 200 {
+				log.Warnf("Failed to create collection, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+				return
+			}
+
+			// Log success message if collection creation is successful.
+			log.Infof("Create collection success, responseBody: %s", string(responseBody))
+		},
+		// Optional timeout can be passed here, if needed. Uncomment the next line to include a timeout.
+		// 5000, // Timeout in milliseconds
+	)
+
+	// Handle possible errors from the POST request.
+	if err != nil {
+		log.Errorf("HTTP request failed with error: %s", err)
+		return err
+	}
+
+	return nil
+}
+
+func FetchTextEmbeddings(c *PluginConfig, log wrapper.Log, texts []string) (*Response, error) {
+	// url := "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+	url := "/api/v1/services/embeddings/text-embedding/text-embedding"
+
+	data := EmbeddingRequest{
+		Model: "text-embedding-v1",
+		Input: Input{
+			Texts: texts,
+		},
+		Parameters: Params{
+			TextType: "query",
+		},
+	}
+
+	requestBody, err := json.Marshal(data)
+	// requestBody := data
+	if err != nil {
+		log.Errorf("Failed to marshal request data: %v", err)
+		return nil, fmt.Errorf("failed to marshal request data: %v", err)
+	}
+
+	headers := [][2]string{
+		{"Authorization", "Bearer " + c.DashVectorInfo.DashScopeKey},
+		{"Content-Type", "application/json"},
+	}
+
+	var result []byte
+	err = c.DashVectorInfo.DashScopeClient.Post(
+		url,
+		headers,
+		requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			if statusCode != 200 {
+				log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+				result = nil
+			} else {
+				log.Infof("Successfully fetched embeddings")
+				result = responseBody
+			}
+		},
+		5000,
+		// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
+	)
+
+	log.Infof("result:%s", result)
+	var resp Response
+	err = json.Unmarshal(result, &resp)
+	if err != nil {
+		log.Errorf("Failed to parse response: %v", err)
+		return nil, err
+	}
+
+	if err != nil {
+		log.Errorf("HTTP request failed with error: %v", err)
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func InsertDocuments(c *PluginConfig, log wrapper.Log, docs []Document) error {
+	url := fmt.Sprintf("%s/%s/docs", c.DashVectorInfo.DashVectorAuthApiEnd, c.DashVectorInfo.DashVectorCollection)
+
+	log.Infof("Inserting documents to %s", url)
+
+	requestBody, err := json.Marshal(InsertRequest{Docs: docs})
+	if err != nil {
+		log.Errorf("Failed to marshal request data: %v", err)
+		return err
+	}
+
+	err = c.DashVectorInfo.DashVectorClient.Post(
+		url,
+		[][2]string{
+			{"Content-Type", "application/json"},
+			{"dashvector-auth-token", c.DashVectorInfo.DashVectorKey},
+		},
+		requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			if statusCode != 200 {
+				log.Errorf("Failed to insert documents: %s", responseBody)
+			} else {
+				log.Infof("Successfully inserted documents")
+			}
+		},
+	)
+	return err
+}
+
 func parseConfig(json gjson.Result, c *PluginConfig, log wrapper.Log) error {
+	log.Infof("config:%s", json.Raw)
+	c.DashVectorInfo.DashScopeKey = json.Get("dashvector.DashScopeKey").String()
+	log.Infof("dash scope key:%s", c.DashVectorInfo.DashScopeKey)
+	if c.DashVectorInfo.DashScopeKey == "" {
+		return errors.New("dash scope key must not by empty")
+	}
+	log.Infof("dash scope key:%s", c.DashVectorInfo.DashScopeKey)
+	c.DashVectorInfo.DashScopeServiceName = json.Get("dashvector.DashScopeServiceName").String()
+	c.DashVectorInfo.DashVectorServiceName = json.Get("dashvector.DashVectorServiceName").String()
+	log.Infof("dash vector service name:%s", c.DashVectorInfo.DashVectorServiceName)
+	c.DashVectorInfo.DashVectorKey = json.Get("dashvector.DashVectorKey").String()
+	log.Infof("dash vector key:%s", c.DashVectorInfo.DashVectorKey)
+	if c.DashVectorInfo.DashVectorKey == "" {
+		return errors.New("dash vector key must not by empty")
+	}
+	c.DashVectorInfo.DashVectorAuthApiEnd = json.Get("dashvector.DashVectorEnd").String()
+	log.Infof("dash vector end:%s", c.DashVectorInfo.DashVectorAuthApiEnd)
+	if c.DashVectorInfo.DashVectorAuthApiEnd == "" {
+		return errors.New("dash vector end must not by empty")
+	}
+	c.DashVectorInfo.DashVectorCollection = json.Get("dashvector.DashVectorCollection").String()
+	log.Infof("dash vector collection:%s", c.DashVectorInfo.DashVectorCollection)
+
+	c.DashVectorInfo.DashVectorClient = wrapper.NewClusterClient(wrapper.DnsCluster{
+		ServiceName: c.DashVectorInfo.DashVectorServiceName,
+		Port:        443,
+		Domain:      "dashvector.com",
+	})
+	c.DashVectorInfo.DashScopeClient = wrapper.NewClusterClient(wrapper.DnsCluster{
+		ServiceName: c.DashVectorInfo.DashScopeServiceName,
+		Port:        443,
+		Domain:      "dashscope.aliyuncs.com",
+	})
+
 	c.RedisInfo.ServiceName = json.Get("redis.serviceName").String()
 	if c.RedisInfo.ServiceName == "" {
 		return errors.New("redis service name must not by empty")
@@ -207,19 +426,31 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		log.Debug("parse key from request body failed")
 		return types.ActionContinue
 	}
+	vector_initialize(gjson.Result{}, &config, log)
+	queryString := config.CacheKeyPrefix + key
+	texts := []string{queryString}
+	log.Infof("fetching embeddings for key:%s", key)
+	resp_answer, err_ := FetchTextEmbeddings(&config, log, texts)
 	ctx.SetContext(CacheKeyContextKey, key)
+	if err_ != nil {
+		log.Warnf("Error fetching embeddings:%v", err_)
+		return types.ActionContinue
+	} else {
+		log.Infof("Successfully fetched embeddings for %v", resp_answer)
+	}
+
 	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
 		if err := response.Error(); err != nil {
-			log.Errorf("redis get key:%s failed, err:%v", key, err)
+			log.Warnf("redis get key:%s failed, err:%v", key, err)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
 		if response.IsNull() {
-			log.Debugf("cache miss, key:%s", key)
+			log.Warnf("cache miss, key:%s", key)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
-		log.Debugf("cache hit, key:%s", key)
+		log.Warnf("cache hit, key:%s", key)
 		ctx.SetContext(CacheKeyContextKey, nil)
 		if !stream {
 			proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
@@ -244,7 +475,7 @@ func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage 
 		}
 	}
 	if len(message) < 6 {
-		log.Errorf("invalid message:%s", message)
+		log.Warnf("invalid message:%s", message)
 		return ""
 	}
 	// skip the prefix "data:"
@@ -265,7 +496,7 @@ func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage 
 		ctx.SetContext(ToolCallsContextKey, struct{}{})
 		return ""
 	}
-	log.Debugf("unknown message:%s", bodyJson)
+	log.Warnf("unknown message:%s", bodyJson)
 	return ""
 }
 
@@ -363,6 +594,39 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 			value = tempContentI.(string)
 		}
 	}
+	// 其实就是这个地方可以不把redis扔掉，可以一起作为缓存，只要封装一下dashvector的东西就可以(set, get)
+	// vector_initialize(gjson.Result{}, &config, log)
+	// queryString := config.CacheKeyPrefix + key
+	// texts := []string{queryString}
+	// log.Infof("fetching embeddings for key:%s", key)
+	// resp, err := FetchTextEmbeddings(&config, log, texts)
+
+	// if err != nil {
+	// 	log.Warnf("Error fetching embeddings:%v", err)
+	// 	return chunk
+	// }
+
+	// queryVector := resp.Output.Embeddings[0].Embedding
+	// docs := []Document{
+	// 	{
+	// 		// ID:     "2",
+	// 		Vector: queryVector,
+	// 		Fields: map[string]string{
+	// 			"query": queryString,
+	// 		},
+	// 	},
+	// }
+
+	// // err = InsertDocuments(config.DashVectorInfo.DashVectorKey, config.DashVectorInfo.DashVectorAuthApiEnd, config.DashVectorInfo.DashVectorCollection, docs)
+
+	// err := InsertDocuments(&config, log, docs)
+	// if err != nil {
+	// 	// log.Warnf("Error inserting documents:%v", err)
+	// 	return chunk
+	// } else {
+	// 	log.Warnf("Insert documents success for key:%s", key)
+	// }
+
 	config.redisClient.Set(config.CacheKeyPrefix+key, value, nil)
 	if config.CacheTTL != 0 {
 		config.redisClient.Expire(config.CacheKeyPrefix+key, config.CacheTTL, nil)
