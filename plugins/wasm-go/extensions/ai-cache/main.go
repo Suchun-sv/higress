@@ -24,6 +24,7 @@ const (
 	ToolCallsContextKey      = "toolCalls"
 	StreamContextKey         = "stream"
 	DefaultCacheKeyPrefix    = "higress-ai-cache:"
+	QueryEmbeddingKey        = "query-embedding"
 )
 
 func main() {
@@ -215,7 +216,16 @@ func vector_initialize(json gjson.Result, c *PluginConfig, log wrapper.Log) erro
 	return nil
 }
 
-func FetchTextEmbeddings(c *PluginConfig, log wrapper.Log, texts []string) (*Response, error) {
+func ParseTextEmbedding(responseBody []byte) (*Response, error) {
+	var resp Response
+	err := json.Unmarshal(responseBody, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func FetchTextEmbeddings(c *PluginConfig, log wrapper.Log, texts []string) (string, []byte, [][2]string) {
 	// url := "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
 	url := "/api/v1/services/embeddings/text-embedding/text-embedding"
 
@@ -233,47 +243,48 @@ func FetchTextEmbeddings(c *PluginConfig, log wrapper.Log, texts []string) (*Res
 	// requestBody := data
 	if err != nil {
 		log.Errorf("Failed to marshal request data: %v", err)
-		return nil, fmt.Errorf("failed to marshal request data: %v", err)
+		return "", nil, nil
 	}
 
 	headers := [][2]string{
 		{"Authorization", "Bearer " + c.DashVectorInfo.DashScopeKey},
 		{"Content-Type", "application/json"},
 	}
+	return url, requestBody, headers
 
-	var result []byte
-	err = c.DashVectorInfo.DashScopeClient.Post(
-		url,
-		headers,
-		requestBody,
-		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-			log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-			if statusCode != 200 {
-				log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-				result = nil
-			} else {
-				log.Infof("Successfully fetched embeddings")
-				result = responseBody
-			}
-		},
-		5000,
-		// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
-	)
+	// var result []byte
+	// err = c.DashVectorInfo.DashScopeClient.Post(
+	// 	url,
+	// 	headers,
+	// 	requestBody,
+	// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+	// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+	// 		if statusCode != 200 {
+	// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+	// 			result = nil
+	// 		} else {
+	// 			log.Infof("Successfully fetched embeddings")
+	// 			result = responseBody
+	// 		}
+	// 	},
+	// 	5000,
+	// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
+	// )
 
-	log.Infof("result:%s", result)
-	var resp Response
-	err = json.Unmarshal(result, &resp)
-	if err != nil {
-		log.Errorf("Failed to parse response: %v", err)
-		return nil, err
-	}
+	// log.Infof("result:%s", result)
+	// var resp Response
+	// err = json.Unmarshal(result, &resp)
+	// if err != nil {
+	// 	log.Errorf("Failed to parse response: %v", err)
+	// 	return nil, err
+	// }
 
-	if err != nil {
-		log.Errorf("HTTP request failed with error: %v", err)
-		return nil, err
-	}
+	// if err != nil {
+	// 	log.Errorf("HTTP request failed with error: %v", err)
+	// 	return nil, err
+	// }
 
-	return &resp, nil
+	// return &resp, nil
 }
 
 func InsertDocuments(c *PluginConfig, log wrapper.Log, docs []Document) error {
@@ -426,38 +437,85 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		log.Debug("parse key from request body failed")
 		return types.ActionContinue
 	}
-	vector_initialize(gjson.Result{}, &config, log)
-	queryString := config.CacheKeyPrefix + key
-	texts := []string{queryString}
-	log.Infof("fetching embeddings for key:%s", key)
-	resp_answer, err_ := FetchTextEmbeddings(&config, log, texts)
-	ctx.SetContext(CacheKeyContextKey, key)
-	if err_ != nil {
-		log.Warnf("Error fetching embeddings:%v", err_)
-		return types.ActionContinue
-	} else {
-		log.Infof("Successfully fetched embeddings for %v", resp_answer)
-	}
 
-	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-		if err := response.Error(); err != nil {
-			log.Warnf("redis get key:%s failed, err:%v", key, err)
-			proxywasm.ResumeHttpRequest()
-			return
-		}
-		if response.IsNull() {
-			log.Warnf("cache miss, key:%s", key)
-			proxywasm.ResumeHttpRequest()
-			return
-		}
-		log.Warnf("cache hit, key:%s", key)
-		ctx.SetContext(CacheKeyContextKey, nil)
-		if !stream {
-			proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-		} else {
-			proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
-		}
-	})
+	// vector_initialize(gjson.Result{}, &config, log)
+	queryString := config.CacheKeyPrefix + key
+	// texts := []string{queryString}
+	// log.Infof("fetching embeddings for key:%s", key)
+	// resp_answer, err_ := FetchTextEmbeddings(&config, log, texts)
+
+	url, requestBody, headers := FetchTextEmbeddings(&config, log, []string{queryString})
+
+	// var result []byte
+	err := config.DashVectorInfo.DashScopeClient.Post(
+		url,
+		headers,
+		requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			if statusCode != 200 {
+				log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+				// result = nil
+				ctx.SetContext(QueryEmbeddingKey, nil)
+				proxywasm.ResumeHttpRequest()
+			} else {
+				log.Infof("Successfully fetched embeddings for key:%s", key)
+				Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+				Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
+				ctx.SetContext(CacheKeyContextKey, Text_embedding)
+				// Redis part
+				config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+					if err := response.Error(); err != nil {
+						log.Warnf("redis get key:%s failed, err:%v", key, err)
+						proxywasm.ResumeHttpRequest()
+						return
+					}
+					if response.IsNull() {
+						log.Warnf("cache miss, key:%s", key)
+						proxywasm.ResumeHttpRequest()
+						return
+					}
+					log.Warnf("cache hit, key:%s", key)
+					ctx.SetContext(CacheKeyContextKey, nil)
+					if !stream {
+						proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+					} else {
+						proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+					}
+				})
+			}
+		},
+		10000,
+		// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
+	)
+
+	// if err_ != nil {
+	// 	log.Warnf("Error fetching embeddings:%v", err_)
+	// 	return types.ActionContinue
+	// } else {
+	// 	log.Infof("Successfully fetched embeddings for %v", resp_answer)
+	// }
+
+	// ctx.SetContext(CacheKeyContextKey, key)
+	// err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+	// 	if err := response.Error(); err != nil {
+	// 		log.Warnf("redis get key:%s failed, err:%v", key, err)
+	// 		proxywasm.ResumeHttpRequest()
+	// 		return
+	// 	}
+	// 	if response.IsNull() {
+	// 		log.Warnf("cache miss, key:%s", key)
+	// 		proxywasm.ResumeHttpRequest()
+	// 		return
+	// 	}
+	// 	log.Warnf("cache hit, key:%s", key)
+	// 	ctx.SetContext(CacheKeyContextKey, nil)
+	// 	if !stream {
+	// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+	// 	} else {
+	// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+	// 	}
+	// })
 	if err != nil {
 		log.Error("redis access failed")
 		return types.ActionContinue
