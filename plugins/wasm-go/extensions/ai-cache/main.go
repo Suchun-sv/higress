@@ -251,41 +251,94 @@ func FetchTextEmbeddings(c *PluginConfig, log wrapper.Log, texts []string) (stri
 		{"Content-Type", "application/json"},
 	}
 	return url, requestBody, headers
-
-	// var result []byte
-	// err = c.DashVectorInfo.DashScopeClient.Post(
-	// 	url,
-	// 	headers,
-	// 	requestBody,
-	// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-	// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-	// 		if statusCode != 200 {
-	// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-	// 			result = nil
-	// 		} else {
-	// 			log.Infof("Successfully fetched embeddings")
-	// 			result = responseBody
-	// 		}
-	// 	},
-	// 	5000,
-	// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
-	// )
-
-	// log.Infof("result:%s", result)
-	// var resp Response
-	// err = json.Unmarshal(result, &resp)
-	// if err != nil {
-	// 	log.Errorf("Failed to parse response: %v", err)
-	// 	return nil, err
-	// }
-
-	// if err != nil {
-	// 	log.Errorf("HTTP request failed with error: %v", err)
-	// 	return nil, err
-	// }
-
-	// return &resp, nil
 }
+
+type QueryResponse struct {
+	Code      int      `json:"code"`
+	RequestID string   `json:"request_id"`
+	Message   string   `json:"message"`
+	Output    []Result `json:"output"`
+}
+
+// QueryRequest 定义查询请求的结构
+type QueryRequest struct {
+	Vector        []float64 `json:"vector"`
+	TopK          int       `json:"topk"`
+	IncludeVector bool      `json:"include_vector"`
+}
+
+type Result struct {
+	ID     string                 `json:"id"`
+	Vector []float64              `json:"vector,omitempty"` // omitempty 使得如果 vector 是空，它将不会被序列化
+	Fields map[string]interface{} `json:"fields"`
+	Score  float64                `json:"score"`
+}
+
+func PerformQuery(c PluginConfig, vector []float64) (string, []byte, [][2]string, error) {
+	url := fmt.Sprintf("/v1/collections/%s/query", c.DashVectorInfo.DashVectorCollection)
+
+	requestData := QueryRequest{
+		Vector:        vector,
+		TopK:          1,
+		IncludeVector: true,
+	}
+
+	requestBody, err := json.Marshal(requestData)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	header := [][2]string{
+		{"Content-Type", "application/json"},
+		{"dashvector-auth-token", c.DashVectorInfo.DashVectorKey},
+	}
+
+	return url, requestBody, header, nil
+}
+
+func ParseQueryResponse(responseBody []byte) (*QueryResponse, error) {
+	var resp QueryResponse
+	err := json.Unmarshal(responseBody, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// var result []byte
+// err = c.DashVectorInfo.DashScopeClient.Post(
+// 	url,
+// 	headers,
+// 	requestBody,
+// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+// 		if statusCode != 200 {
+// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+// 			result = nil
+// 		} else {
+// 			log.Infof("Successfully fetched embeddings")
+// 			result = responseBody
+// 		}
+// 	},
+// 	5000,
+// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
+// )
+
+// log.Infof("result:%s", result)
+// var resp Response
+// err = json.Unmarshal(result, &resp)
+// if err != nil {
+// 	log.Errorf("Failed to parse response: %v", err)
+// 	return nil, err
+// }
+
+// if err != nil {
+// 	log.Errorf("HTTP request failed with error: %v", err)
+// 	return nil, err
+// }
+
+// return &resp, nil
+// }
 
 func InsertDocuments(c *PluginConfig, log wrapper.Log, docs []Document) error {
 	url := fmt.Sprintf("%s/%s/docs", c.DashVectorInfo.DashVectorAuthApiEnd, c.DashVectorInfo.DashVectorCollection)
@@ -343,7 +396,7 @@ func parseConfig(json gjson.Result, c *PluginConfig, log wrapper.Log) error {
 	c.DashVectorInfo.DashVectorClient = wrapper.NewClusterClient(wrapper.DnsCluster{
 		ServiceName: c.DashVectorInfo.DashVectorServiceName,
 		Port:        443,
-		Domain:      "dashvector.com",
+		Domain:      c.DashVectorInfo.DashVectorAuthApiEnd,
 	})
 	c.DashVectorInfo.DashScopeClient = wrapper.NewClusterClient(wrapper.DnsCluster{
 		ServiceName: c.DashVectorInfo.DashScopeServiceName,
@@ -444,50 +497,152 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	// log.Infof("fetching embeddings for key:%s", key)
 	// resp_answer, err_ := FetchTextEmbeddings(&config, log, texts)
 
-	url, requestBody, headers := FetchTextEmbeddings(&config, log, []string{queryString})
+	Emb_url, Emb_requestBody, Emb_headers := FetchTextEmbeddings(&config, log, []string{queryString})
 
-	// var result []byte
-	err := config.DashVectorInfo.DashScopeClient.Post(
-		url,
-		headers,
-		requestBody,
-		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-			log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-			if statusCode != 200 {
-				log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-				// result = nil
-				ctx.SetContext(QueryEmbeddingKey, nil)
-				proxywasm.ResumeHttpRequest()
-			} else {
-				log.Infof("Successfully fetched embeddings for key:%s", key)
-				Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
-				Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
-				ctx.SetContext(CacheKeyContextKey, Text_embedding)
-				// Redis part
-				config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-					if err := response.Error(); err != nil {
-						log.Warnf("redis get key:%s failed, err:%v", key, err)
-						proxywasm.ResumeHttpRequest()
-						return
-					}
-					if response.IsNull() {
-						log.Warnf("cache miss, key:%s", key)
-						proxywasm.ResumeHttpRequest()
-						return
-					}
-					log.Warnf("cache hit, key:%s", key)
-					ctx.SetContext(CacheKeyContextKey, nil)
-					if !stream {
-						proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-					} else {
-						proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
-					}
-				})
+	// if redis.get(key) == nil:
+	//    Emb = dashvector.post(url, requestBody, headers)
+	// 	  redis.set(key, Emb)
+	// 	  Most_similar = dashvector.post(url, requestBody, headers)
+	//    send_key_post
+	// 	  return Most_similar
+	// else:
+	//    resp = redis.get(key)
+	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+		if err := response.Error(); err != nil || response.IsNull() {
+			// if response.IsNull() {
+			// 	log.Warnf("cache miss, key:%s", key)
+			// }
+			if err != nil {
+				log.Warnf("redis get key:%s failed, err:%v", key, err)
 			}
-		},
-		10000,
-		// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
-	)
+			if response.IsNull() {
+				log.Warnf("cache miss, key:%s", key)
+			}
+			// 开始调用embedding
+			config.DashVectorInfo.DashScopeClient.Post(
+				Emb_url,
+				Emb_headers,
+				Emb_requestBody,
+				func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+					log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+					if statusCode != 200 {
+						log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+						// result = nil
+						ctx.SetContext(QueryEmbeddingKey, nil)
+					} else {
+						log.Infof("Successfully fetched embeddings for key:%s", key)
+						Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+						Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
+						ctx.SetContext(CacheKeyContextKey, Text_embedding)
+						// 和redis交互
+						config.redisClient.Set(config.CacheKeyPrefix+key, Text_embedding, func(response resp.Value) {
+							if err := response.Error(); err != nil {
+								log.Warnf("redis set key:%s failed, err:%v", key, err)
+								proxywasm.ResumeHttpRequest()
+								return
+							}
+							log.Infof("Successfully set key:%s", key)
+							// 确认存了之后继续和database交互
+							vector_url, vector_request, vector_headers, err := PerformQuery(config, Text_embedding)
+							if err != nil {
+								log.Errorf("Failed to perform query, err: %v", err)
+								proxywasm.ResumeHttpRequest()
+								return
+							}
+							// config.DashVectorInfo.DashVectorClient.Post(
+							config.DashVectorInfo.DashVectorClient.Post(
+								vector_url,
+								vector_headers,
+								vector_request,
+								func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+									log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+									query_resp, err_query := ParseQueryResponse(responseBody)
+									if err_query != nil {
+										log.Errorf("Failed to parse response: %v", err)
+										proxywasm.ResumeHttpRequest()
+										return
+									}
+									most_similar_key := query_resp.Output[0].Fields["query"].(string)
+									log.Infof("most similar key:%s", most_similar_key)
+									ctx.SetContext(CacheKeyContextKey, nil)
+									if !stream {
+										proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, most_similar_key)), -1)
+									} else {
+										proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, most_similar_key)), -1)
+									}
+									proxywasm.ResumeHttpRequest()
+									// if statusCode != 200 {
+									// 	log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+									// 	// result = nil
+									// 	ctx.SetContext(QueryEmbeddingKey, nil)
+									// } else {
+									// 	log.Infof("Successfully fetched embeddings for key:%s", key)
+									// 	Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+									// 	Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embeddin
+								},
+								100000)
+						})
+					}
+				},
+				10000)
+		} else {
+			log.Warnf("cache hit, key:%s", key)
+			ctx.SetContext(CacheKeyContextKey, nil)
+			if !stream {
+				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+			} else {
+				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+			}
+		}
+	})
+	if err != nil {
+		log.Error("redis access failed")
+		return types.ActionContinue
+	}
+	return types.ActionPause
+
+	// 获取特征
+	// err = config.DashVectorInfo.DashScopeClient.Post(
+	// 	Emb_url,
+	// 	Emb_headers,
+	// 	Emb_requestBody,
+	// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+	// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+	// 		if statusCode != 200 {
+	// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+	// 			// result = nil
+	// 			ctx.SetContext(QueryEmbeddingKey, nil)
+	// 			proxywasm.ResumeHttpRequest()
+	// 		} else {
+	// 			log.Infof("Successfully fetched embeddings for key:%s", key)
+	// 			Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+	// 			Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
+	// 			ctx.SetContext(CacheKeyContextKey, Text_embedding)
+	// 			// 和redis交互
+	// 			config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+	// 				if err := response.Error(); err != nil {
+	// 					log.Warnf("redis get key:%s failed, err:%v", key, err)
+	// 					proxywasm.ResumeHttpRequest()
+	// 					return
+	// 				}
+	// 				if response.IsNull() {
+	// 					log.Warnf("cache miss, key:%s", key)
+	// 					proxywasm.ResumeHttpRequest()
+	// 					return
+	// 				}
+	// 				log.Warnf("cache hit, key:%s", key)
+	// 				ctx.SetContext(CacheKeyContextKey, nil)
+	// 				if !stream {
+	// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+	// 				} else {
+	// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+	// 				}
+	// 			})
+	// 		}
+	// 	},
+	// 	10000,
+	// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
+	// )
 
 	// if err_ != nil {
 	// 	log.Warnf("Error fetching embeddings:%v", err_)
