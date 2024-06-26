@@ -509,22 +509,21 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	//    resp = redis.get(key)
 	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
 		if err := response.Error(); err != nil || response.IsNull() {
-			// if response.IsNull() {
-			// 	log.Warnf("cache miss, key:%s", key)
-			// }
 			if err != nil {
-				log.Warnf("redis get key:%s failed, err:%v", key, err)
+				log.Infof("redis get key:%s failed, err:%v", key, err)
 			}
 			if response.IsNull() {
-				log.Warnf("cache miss, key:%s", key)
+				log.Infof("cache miss, key:%s", key)
 			}
 			// 开始调用embedding
+			log.Infof("Start to fetch embeddings for key:%s", key)
 			config.DashVectorInfo.DashScopeClient.Post(
 				Emb_url,
 				Emb_headers,
 				Emb_requestBody,
 				func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-					log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+					// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+					log.Infof("The statusCode for fetching %s is %d", key, statusCode)
 					if statusCode != 200 {
 						log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
 						// result = nil
@@ -533,55 +532,84 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 						log.Infof("Successfully fetched embeddings for key:%s", key)
 						Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
 						Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
-						ctx.SetContext(CacheKeyContextKey, Text_embedding)
-						// 和redis交互
-						config.redisClient.Set(config.CacheKeyPrefix+key, Text_embedding, func(response resp.Value) {
-							if err := response.Error(); err != nil {
-								log.Warnf("redis set key:%s failed, err:%v", key, err)
-								proxywasm.ResumeHttpRequest()
-								return
-							}
-							log.Infof("Successfully set key:%s", key)
-							// 确认存了之后继续和database交互
-							vector_url, vector_request, vector_headers, err := PerformQuery(config, Text_embedding)
-							if err != nil {
-								log.Errorf("Failed to perform query, err: %v", err)
-								proxywasm.ResumeHttpRequest()
-								return
-							}
-							// config.DashVectorInfo.DashVectorClient.Post(
-							config.DashVectorInfo.DashVectorClient.Post(
-								vector_url,
-								vector_headers,
-								vector_request,
-								func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-									log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-									query_resp, err_query := ParseQueryResponse(responseBody)
-									if err_query != nil {
-										log.Errorf("Failed to parse response: %v", err)
-										proxywasm.ResumeHttpRequest()
-										return
-									}
-									most_similar_key := query_resp.Output[0].Fields["query"].(string)
-									log.Infof("most similar key:%s", most_similar_key)
-									ctx.SetContext(CacheKeyContextKey, nil)
-									if !stream {
-										proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, most_similar_key)), -1)
-									} else {
-										proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, most_similar_key)), -1)
-									}
+						ctx.SetContext(QueryEmbeddingKey, Text_embedding)
+						// 请求向量数据库获取最近的score
+						vector_url, vector_request, vector_headers, err := PerformQuery(config, Text_embedding)
+						if err != nil {
+							log.Errorf("Failed to perform query, err: %v", err)
+							proxywasm.ResumeHttpRequest()
+							return
+						}
+						config.DashVectorInfo.DashVectorClient.Post(
+							vector_url,
+							vector_headers,
+							vector_request,
+							func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+								// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+								log.Infof("The statusCode for querying %s is %d", key, statusCode)
+								query_resp, err_query := ParseQueryResponse(responseBody)
+								if err_query != nil {
+									log.Errorf("Failed to parse response: %v", err)
 									proxywasm.ResumeHttpRequest()
-									// if statusCode != 200 {
-									// 	log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-									// 	// result = nil
-									// 	ctx.SetContext(QueryEmbeddingKey, nil)
-									// } else {
-									// 	log.Infof("Successfully fetched embeddings for key:%s", key)
-									// 	Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
-									// 	Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embeddin
-								},
-								100000)
-						})
+									return
+								}
+								most_similar_key := query_resp.Output[0].Fields["query"].(string)
+								most_similar_score := query_resp.Output[0].Score
+								log.Infof("most similar key:%s and the most similar score: %f", most_similar_key, most_similar_score)
+								// ctx.SetContext(CacheKeyContextKey, nil)
+								if most_similar_score > 0.9 {
+									// 发起redis Get 调用
+									config.redisClient.Get(config.CacheKeyPrefix+most_similar_key, func(response resp.Value) {
+										if err := response.Error(); err != nil {
+											log.Warnf("similar call: redis get key:%s failed, err:%v", most_similar_key, err)
+											ctx.SetContext(CacheKeyContextKey, nil)
+											proxywasm.ResumeHttpRequest()
+											return
+										}
+										if response.IsNull() {
+											log.Warnf("similar call: cache miss, key:%s", most_similar_key)
+											ctx.SetContext(CacheKeyContextKey, nil)
+											proxywasm.ResumeHttpRequest()
+											return
+										}
+										log.Warnf("similar call: cache hit, key:%s", most_similar_key)
+										if !stream {
+											proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+										} else {
+											proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+										}
+									})
+								}
+								proxywasm.ResumeHttpRequest()
+							},
+							100000)
+						// config.DashVectorInfo.DashVectorClient.Post(
+						// 	vector_url,
+						// 	vector_headers,
+						// 	vector_request,
+						// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+						// 		// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+						// 		log.Infof("The statusCode for querying %s is %d", key, statusCode)
+						// 		query_resp, err_query := ParseQueryResponse(responseBody)
+						// 		if err_query != nil {
+						// 			log.Errorf("Failed to parse response: %v", err)
+						// 			proxywasm.ResumeHttpRequest()
+						// 			return
+						// 		}
+						// 		most_similar_key := query_resp.Output[0].Fields["query"].(string)
+						// 		most_similar_score := query_resp.Output[0].Score
+						// 		log.Infof("most similar key:%s and the most similar score: %d", most_similar_key, most_similar_score)
+						// 		ctx.SetContext(CacheKeyContextKey, nil)
+						// 		if most_similar_score > 0.9 {
+						// 			if !stream {
+						// 				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, most_similar_key)), -1)
+						// 			} else {
+						// 				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, most_similar_key)), -1)
+						// 			}
+						// 		}
+						// 		// proxywasm.ResumeHttpRequest()
+						// 	},
+						// 	100000)
 					}
 				},
 				10000)
@@ -600,83 +628,84 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		return types.ActionContinue
 	}
 	return types.ActionPause
-
-	// 获取特征
-	// err = config.DashVectorInfo.DashScopeClient.Post(
-	// 	Emb_url,
-	// 	Emb_headers,
-	// 	Emb_requestBody,
-	// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-	// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-	// 		if statusCode != 200 {
-	// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-	// 			// result = nil
-	// 			ctx.SetContext(QueryEmbeddingKey, nil)
-	// 			proxywasm.ResumeHttpRequest()
-	// 		} else {
-	// 			log.Infof("Successfully fetched embeddings for key:%s", key)
-	// 			Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
-	// 			Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
-	// 			ctx.SetContext(CacheKeyContextKey, Text_embedding)
-	// 			// 和redis交互
-	// 			config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-	// 				if err := response.Error(); err != nil {
-	// 					log.Warnf("redis get key:%s failed, err:%v", key, err)
-	// 					proxywasm.ResumeHttpRequest()
-	// 					return
-	// 				}
-	// 				if response.IsNull() {
-	// 					log.Warnf("cache miss, key:%s", key)
-	// 					proxywasm.ResumeHttpRequest()
-	// 					return
-	// 				}
-	// 				log.Warnf("cache hit, key:%s", key)
-	// 				ctx.SetContext(CacheKeyContextKey, nil)
-	// 				if !stream {
-	// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-	// 				} else {
-	// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
-	// 				}
-	// 			})
-	// 		}
-	// 	},
-	// 	10000,
-	// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
-	// )
-
-	// if err_ != nil {
-	// 	log.Warnf("Error fetching embeddings:%v", err_)
-	// 	return types.ActionContinue
-	// } else {
-	// 	log.Infof("Successfully fetched embeddings for %v", resp_answer)
-	// }
-
-	// ctx.SetContext(CacheKeyContextKey, key)
-	// err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-	// 	if err := response.Error(); err != nil {
-	// 		log.Warnf("redis get key:%s failed, err:%v", key, err)
-	// 		proxywasm.ResumeHttpRequest()
-	// 		return
-	// 	}
-	// 	if response.IsNull() {
-	// 		log.Warnf("cache miss, key:%s", key)
-	// 		proxywasm.ResumeHttpRequest()
-	// 		return
-	// 	}
-	// 	log.Warnf("cache hit, key:%s", key)
-	// 	ctx.SetContext(CacheKeyContextKey, nil)
-	// 	if !stream {
-	// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-	// 	} else {
-	// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
-	// 	}
-	// })
-	if err != nil {
-		log.Error("redis access failed")
-		return types.ActionContinue
-	}
-	return types.ActionPause
 }
+
+// 获取特征
+// err = config.DashVectorInfo.DashScopeClient.Post(
+// 	Emb_url,
+// 	Emb_headers,
+// 	Emb_requestBody,
+// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+// 		if statusCode != 200 {
+// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+// 			// result = nil
+// 			ctx.SetContext(QueryEmbeddingKey, nil)
+// 			proxywasm.ResumeHttpRequest()
+// 		} else {
+// 			log.Infof("Successfully fetched embeddings for key:%s", key)
+// 			Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+// 			Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
+// 			ctx.SetContext(CacheKeyContextKey, Text_embedding)
+// 			// 和redis交互
+// 			config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+// 				if err := response.Error(); err != nil {
+// 					log.Warnf("redis get key:%s failed, err:%v", key, err)
+// 					proxywasm.ResumeHttpRequest()
+// 					return
+// 				}
+// 				if response.IsNull() {
+// 					log.Warnf("cache miss, key:%s", key)
+// 					proxywasm.ResumeHttpRequest()
+// 					return
+// 				}
+// 				log.Warnf("cache hit, key:%s", key)
+// 				ctx.SetContext(CacheKeyContextKey, nil)
+// 				if !stream {
+// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+// 				} else {
+// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+// 				}
+// 			})
+// 		}
+// 	},
+// 	10000,
+// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
+// )
+
+// if err_ != nil {
+// 	log.Warnf("Error fetching embeddings:%v", err_)
+// 	return types.ActionContinue
+// } else {
+// 	log.Infof("Successfully fetched embeddings for %v", resp_answer)
+// }
+
+// ctx.SetContext(CacheKeyContextKey, key)
+// err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+// 	if err := response.Error(); err != nil {
+// 		log.Warnf("redis get key:%s failed, err:%v", key, err)
+// 		proxywasm.ResumeHttpRequest()
+// 		return
+// 	}
+// 	if response.IsNull() {
+// 		log.Warnf("cache miss, key:%s", key)
+// 		proxywasm.ResumeHttpRequest()
+// 		return
+// 	}
+// 	log.Warnf("cache hit, key:%s", key)
+// 	ctx.SetContext(CacheKeyContextKey, nil)
+// 	if !stream {
+// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+// 	} else {
+// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+// 	}
+// })
+// if err != nil {
+// log.Error("redis access failed")
+// return types.ActionContinue
+// }
+// 	return types.ActionPause
+// }
 
 func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage string, log wrapper.Log) string {
 	subMessages := strings.Split(sseMessage, "\n")
@@ -840,7 +869,26 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 	// 	log.Warnf("Insert documents success for key:%s", key)
 	// }
 
-	config.redisClient.Set(config.CacheKeyPrefix+key, value, nil)
+	// config.redisClient.Set(config.CacheKeyPrefix+key, value, nil)
+	query_embedding := ctx.GetContext(QueryEmbeddingKey)
+	config.redisClient.Set(config.CacheKeyPrefix+key, value, func(response resp.Value) {
+		log.Infof("Successfully set key %s to value %s", key, value)
+		// 发起DashVector的向量插入请求
+		config.DashVectorInfo.DashVectorClient.Post(
+			"/v1/collections/"+config.DashVectorInfo.DashVectorCollection+"/docs",
+			[][2]string{
+				{"Content-Type", "application/json"},
+				{"dashvector-auth-token", config.DashVectorInfo.DashVectorKey},
+			},
+			[]byte(fmt.Sprintf(`{"docs":[{"vector":%v,"fields":{"query":"%s"}}]}`, query_embedding, key)),
+			func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+				if statusCode != 200 {
+					log.Errorf("Failed to insert documents: %s", responseBody)
+				} else {
+					log.Infof("Successfully inserted documents for key %s", key)
+				}
+			})
+	})
 	if config.CacheTTL != 0 {
 		config.redisClient.Expire(config.CacheKeyPrefix+key, config.CacheTTL, nil)
 	}

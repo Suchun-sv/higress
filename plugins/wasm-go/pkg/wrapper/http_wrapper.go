@@ -22,6 +22,19 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 )
 
+// // 缩减过长的列表字段
+// func truncateLargeLists(data map[string]interface{}) {
+// 	for key, value := range data {
+// 		// 检查字段是否为列表
+// 		if v, ok := value.([]interface{}); ok {
+// 			// 如果列表长度超过100，缩减为前10个元素
+// 			if len(v) > 100 {
+// 				data[key] = v[:10]
+// 			}
+// 		}
+// 	}
+// }
+
 type ResponseCallback func(statusCode int, responseHeaders http.Header, responseBody []byte)
 
 type HttpClient interface {
@@ -111,11 +124,19 @@ func HttpCall(cluster Cluster, method, path string, headers [][2]string, body []
 			}
 			headers.Add(h[0], h[1])
 		}
+		displayresponse := respBody
+		if len(respBody) > 100 {
+			displayresponse = respBody[:100]
+		}
 		proxywasm.LogDebugf("http call end, id: %s, code: %d, normal: %t, body: %s",
-			requestID, code, normalResponse, respBody)
+			requestID, code, normalResponse, displayresponse)
 		callback(code, headers, respBody)
 	})
+	displaybody := body
+	if len(body) > 100 {
+		displaybody = body[:100]
+	}
 	proxywasm.LogDebugf("http call start, id: %s, cluster: %s, host name: %s, method: %s, path: %s, body: %s, timeout: %d",
-		requestID, cluster.ClusterName(), cluster.HostName(), method, path, body, timeout)
+		requestID, cluster.ClusterName(), cluster.HostName(), method, path, displaybody, timeout)
 	return err
 }
