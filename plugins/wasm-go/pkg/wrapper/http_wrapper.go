@@ -125,17 +125,17 @@ func HttpCall(cluster Cluster, method, path string, headers [][2]string, body []
 			headers.Add(h[0], h[1])
 		}
 		displayresponse := respBody
-		if len(respBody) > 100 {
-			displayresponse = respBody[:100]
-		}
+		// if len(respBody) > 100 {
+		// 	displayresponse = respBody[:100]
+		// }
 		proxywasm.LogDebugf("http call end, id: %s, code: %d, normal: %t, body: %s",
 			requestID, code, normalResponse, displayresponse)
 		callback(code, headers, respBody)
 	})
 	displaybody := body
-	if len(body) > 100 {
-		displaybody = body[:100]
-	}
+	// if len(body) > 100 {
+	// 	displaybody = body[:100]
+	// }
 	proxywasm.LogDebugf("http call start, id: %s, cluster: %s, host name: %s, method: %s, path: %s, body: %s, timeout: %d",
 		requestID, cluster.ClusterName(), cluster.HostName(), method, path, displaybody, timeout)
 	return err

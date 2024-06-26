@@ -24,6 +24,7 @@ const (
 	ToolCallsContextKey      = "toolCalls"
 	StreamContextKey         = "stream"
 	DefaultCacheKeyPrefix    = "higress-ai-cache:"
+	QueryStringKey           = "queryString"
 	QueryEmbeddingKey        = "query-embedding"
 )
 
@@ -173,7 +174,7 @@ type EmbeddingRequest struct {
 
 // Document 定义每个文档的结构
 type Document struct {
-	ID     string            `json:"id"`
+	// ID     string            `json:"id"`
 	Vector []float64         `json:"vector"`
 	Fields map[string]string `json:"fields"`
 }
@@ -492,7 +493,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	}
 
 	// vector_initialize(gjson.Result{}, &config, log)
-	queryString := config.CacheKeyPrefix + key
+	ctx.SetContext(CacheKeyContextKey, key)
+	ctx.SetContext(QueryStringKey, key)
+	queryString := key
 	// texts := []string{queryString}
 	// log.Infof("fetching embeddings for key:%s", key)
 	// resp_answer, err_ := FetchTextEmbeddings(&config, log, texts)
@@ -553,26 +556,33 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 									proxywasm.ResumeHttpRequest()
 									return
 								}
-								most_similar_key := query_resp.Output[0].Fields["query"].(string)
-								most_similar_score := query_resp.Output[0].Score
+								most_similar_key := key
+								most_similar_score := 10000.0
+								if len(query_resp.Output) != 0 {
+									most_similar_key = query_resp.Output[0].Fields["query"].(string)
+									most_similar_score = query_resp.Output[0].Score
+								} else {
+									log.Warnf("No similar key found for key:%s", key)
+								}
 								log.Infof("most similar key:%s and the most similar score: %f", most_similar_key, most_similar_score)
 								// ctx.SetContext(CacheKeyContextKey, nil)
-								if most_similar_score > 0.9 {
+								if most_similar_score < 6000 {
 									// 发起redis Get 调用
 									config.redisClient.Get(config.CacheKeyPrefix+most_similar_key, func(response resp.Value) {
 										if err := response.Error(); err != nil {
 											log.Warnf("similar call: redis get key:%s failed, err:%v", most_similar_key, err)
-											ctx.SetContext(CacheKeyContextKey, nil)
+											// ctx.SetContext(CacheKeyContextKey, nil)
 											proxywasm.ResumeHttpRequest()
 											return
 										}
 										if response.IsNull() {
 											log.Warnf("similar call: cache miss, key:%s", most_similar_key)
-											ctx.SetContext(CacheKeyContextKey, nil)
+											// ctx.SetContext(CacheKeyContextKey, nil)
 											proxywasm.ResumeHttpRequest()
 											return
 										}
 										log.Warnf("similar call: cache hit, key:%s", most_similar_key)
+										ctx.SetContext(CacheKeyContextKey, nil)
 										if !stream {
 											proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
 										} else {
@@ -583,33 +593,6 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 								proxywasm.ResumeHttpRequest()
 							},
 							100000)
-						// config.DashVectorInfo.DashVectorClient.Post(
-						// 	vector_url,
-						// 	vector_headers,
-						// 	vector_request,
-						// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-						// 		// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-						// 		log.Infof("The statusCode for querying %s is %d", key, statusCode)
-						// 		query_resp, err_query := ParseQueryResponse(responseBody)
-						// 		if err_query != nil {
-						// 			log.Errorf("Failed to parse response: %v", err)
-						// 			proxywasm.ResumeHttpRequest()
-						// 			return
-						// 		}
-						// 		most_similar_key := query_resp.Output[0].Fields["query"].(string)
-						// 		most_similar_score := query_resp.Output[0].Score
-						// 		log.Infof("most similar key:%s and the most similar score: %d", most_similar_key, most_similar_score)
-						// 		ctx.SetContext(CacheKeyContextKey, nil)
-						// 		if most_similar_score > 0.9 {
-						// 			if !stream {
-						// 				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, most_similar_key)), -1)
-						// 			} else {
-						// 				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, most_similar_key)), -1)
-						// 			}
-						// 		}
-						// 		// proxywasm.ResumeHttpRequest()
-						// 	},
-						// 	100000)
 					}
 				},
 				10000)
@@ -747,16 +730,57 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wra
 	if strings.Contains(contentType, "text/event-stream") {
 		ctx.SetContext(StreamContextKey, struct{}{})
 	}
-	return types.ActionContinue
+
+	if ctx.GetContext(CacheKeyContextKey) == nil {
+		return types.ActionContinue
+	}
+
+	doc := Document{
+		Vector: ctx.GetContext(QueryEmbeddingKey).([]float64),
+		Fields: map[string]string{
+			"query": ctx.GetContext(QueryStringKey).(string),
+		},
+	}
+	InsertDocumentsBody, _ := json.Marshal(InsertRequest{Docs: []Document{doc}})
+
+	key := ctx.GetContext(QueryStringKey)
+	// query_embedding := ctx.GetContext(QueryEmbeddingKey)
+	log.Infof("Start to insert documents for key %s", key)
+	err := config.DashVectorInfo.DashVectorClient.Post(
+		"/v1/collections/"+config.DashVectorInfo.DashVectorCollection+"/docs",
+		[][2]string{
+			{"Content-Type", "application/json"},
+			{"dashvector-auth-token", config.DashVectorInfo.DashVectorKey},
+		},
+		// []byte(fmt.Sprintf(`{"docs":[{"vector":%v,"fields":{"query":"%s"}}]}`, query_embedding, key)),
+		InsertDocumentsBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			if statusCode != 200 {
+				log.Errorf("Failed to insert documents: %s", responseBody)
+				proxywasm.ResumeHttpResponse()
+				return
+			} else {
+				log.Infof("Successfully inserted documents for key: %s", key)
+				proxywasm.ResumeHttpResponse()
+				return
+			}
+		}, 10000)
+	if err != nil {
+		log.Errorf("Failed to insert documents: %v", err)
+		return types.ActionContinue
+	}
+	return types.ActionPause
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []byte, isLastChunk bool, log wrapper.Log) []byte {
+	log.Infof("We are in onHttpResponseBody")
 	if ctx.GetContext(ToolCallsContextKey) != nil {
 		// we should not cache tool call result
 		return chunk
 	}
 	keyI := ctx.GetContext(CacheKeyContextKey)
 	if keyI == nil {
+		log.Infof("1st return chunk")
 		return chunk
 	}
 	if !isLastChunk {
@@ -791,8 +815,10 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 				ctx.SetContext(PartialMessageContextKey, nil)
 			}
 		}
+		log.Infof("2st return chunk")
 		return chunk
 	}
+	log.Infof("We are in the last chunk")
 	// last chunk
 	key := keyI.(string)
 	stream := ctx.GetContext(StreamContextKey)
@@ -836,61 +862,106 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 			value = tempContentI.(string)
 		}
 	}
-	// 其实就是这个地方可以不把redis扔掉，可以一起作为缓存，只要封装一下dashvector的东西就可以(set, get)
-	// vector_initialize(gjson.Result{}, &config, log)
-	// queryString := config.CacheKeyPrefix + key
-	// texts := []string{queryString}
-	// log.Infof("fetching embeddings for key:%s", key)
-	// resp, err := FetchTextEmbeddings(&config, log, texts)
-
-	// if err != nil {
-	// 	log.Warnf("Error fetching embeddings:%v", err)
-	// 	return chunk
-	// }
-
-	// queryVector := resp.Output.Embeddings[0].Embedding
-	// docs := []Document{
-	// 	{
-	// 		// ID:     "2",
-	// 		Vector: queryVector,
-	// 		Fields: map[string]string{
-	// 			"query": queryString,
+	// query_embedding := ctx.GetContext(QueryEmbeddingKey)
+	// config.redisClient.Set(config.CacheKeyPrefix+key, value, func(response resp.Value) {
+	// 	log.Infof("Successfully set key %s to value %s", key, value)
+	// 	// 发起DashVector的向量插入请求
+	// 	config.DashVectorInfo.DashVectorClient.Post(
+	// 		"/v1/collections/"+config.DashVectorInfo.DashVectorCollection+"/docs",
+	// 		[][2]string{
+	// 			{"Content-Type", "application/json"},
+	// 			{"dashvector-auth-token", config.DashVectorInfo.DashVectorKey},
 	// 		},
-	// 	},
-	// }
-
-	// // err = InsertDocuments(config.DashVectorInfo.DashVectorKey, config.DashVectorInfo.DashVectorAuthApiEnd, config.DashVectorInfo.DashVectorCollection, docs)
-
-	// err := InsertDocuments(&config, log, docs)
-	// if err != nil {
-	// 	// log.Warnf("Error inserting documents:%v", err)
-	// 	return chunk
-	// } else {
-	// 	log.Warnf("Insert documents success for key:%s", key)
-	// }
-
-	// config.redisClient.Set(config.CacheKeyPrefix+key, value, nil)
-	query_embedding := ctx.GetContext(QueryEmbeddingKey)
+	// 		[]byte(fmt.Sprintf(`{"docs":[{"vector":%v,"fields":{"query":"%s"}}]}`, query_embedding, key)),
+	// 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+	// 			if statusCode != 200 {
+	// 				log.Errorf("Failed to insert documents: %s", responseBody)
+	// 			} else {
+	// 				log.Infof("Successfully inserted documents for key %s", key)
+	// 			}
+	// 		})
+	// })
+	log.Infof("Start to set key %s to value %s to the redis", key, value)
 	config.redisClient.Set(config.CacheKeyPrefix+key, value, func(response resp.Value) {
-		log.Infof("Successfully set key %s to value %s", key, value)
-		// 发起DashVector的向量插入请求
-		config.DashVectorInfo.DashVectorClient.Post(
-			"/v1/collections/"+config.DashVectorInfo.DashVectorCollection+"/docs",
-			[][2]string{
-				{"Content-Type", "application/json"},
-				{"dashvector-auth-token", config.DashVectorInfo.DashVectorKey},
-			},
-			[]byte(fmt.Sprintf(`{"docs":[{"vector":%v,"fields":{"query":"%s"}}]}`, query_embedding, key)),
-			func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-				if statusCode != 200 {
-					log.Errorf("Failed to insert documents: %s", responseBody)
-				} else {
-					log.Infof("Successfully inserted documents for key %s", key)
-				}
-			})
+		if err := response.Error(); err != nil {
+			log.Warnf("redis set key:%s failed, err:%v", key, err)
+			return
+		} else {
+			log.Infof("Successfully set key %s to value %s", key, value)
+		}
 	})
 	if config.CacheTTL != 0 {
 		config.redisClient.Expire(config.CacheKeyPrefix+key, config.CacheTTL, nil)
 	}
 	return chunk
+	// return types.ActionPause
 }
+
+// func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []byte, isLastChunk bool, log wrapper.Log) types.Action {
+// 	if ctx.GetContext(ToolCallsContextKey) != nil {
+// 		// we should not cache tool call result
+// 		return types.ActionContinue
+// 	}
+// 	keyI := ctx.GetContext(CacheKeyContextKey)
+// 	if keyI == nil {
+// 		return types.ActionContinue
+// 	}
+
+// 	var body []byte
+// 	var value string
+// 	key := keyI.(string)
+
+// 	if !isLastChunk {
+// 		// Accumulate chunks if not the last one
+// 		tempContentI := ctx.GetContext(CacheContentContextKey)
+// 		if tempContentI != nil {
+// 			body = append(tempContentI.([]byte), chunk...)
+// 			ctx.SetContext(CacheContentContextKey, body)
+// 		} else {
+// 			ctx.SetContext(CacheContentContextKey, chunk)
+// 		}
+// 		return types.ActionContinue
+// 	} else {
+// 		// Process the last chunk
+// 		tempContentI := ctx.GetContext(CacheContentContextKey)
+// 		if tempContentI != nil {
+// 			body = append(tempContentI.([]byte), chunk...)
+// 		} else {
+// 			body = chunk
+// 		}
+
+// 		bodyJson := gjson.ParseBytes(body)
+// 		value = TrimQuote(bodyJson.Get(config.CacheValueFrom.ResponseBody).Raw)
+// 		if value == "" {
+// 			log.Warnf("parse value from response body failed, body: %s", body)
+// 			return types.ActionContinue
+// 		}
+// 	}
+
+// 	// Use proxywasm.ReplaceHttpResponseBody to change response body
+// 	if modifiedBody, err := someModificationFunction(body); err == nil {
+// 		proxywasm.ReplaceHttpResponseBody(modifiedBody)
+// 	} else {
+// 		log.Warnf("Failed to modify response body: %v", err)
+// 	}
+
+// 	// Async operation with Redis
+// 	log.Infof("Start to set key %s to value %s in Redis", key, value)
+// 	config.redisClient.Set(config.CacheKeyPrefix+key, value, func(response resp.Value) {
+// 		log.Infof("Successfully set key %s to value %s", key, value)
+// 		// After the set operation is completed, resume the response
+// 		proxywasm.ResumeHttpResponse()
+// 	})
+
+// 	if config.CacheTTL != 0 {
+// 		config.redisClient.Expire(config.CacheKeyPrefix+key, config.CacheTTL, nil)
+// 	}
+
+// 	// Return Pause to stop processing and wait for the async callback to resume
+// 	return types.ActionPause
+// }
+
+// func someModificationFunction(body []byte) ([]byte, error) {
+// 	// Implement your modification logic here
+// 	return body, nil
+// }
