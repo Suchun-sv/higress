@@ -486,7 +486,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	} else if ctx.GetContext(StreamContextKey) != nil {
 		stream = true
 	}
-	key := TrimQuote(bodyJson.Get(config.CacheKeyFrom.RequestBody).Raw)
+	// key := TrimQuote(bodyJson.Get(config.CacheKeyFrom.RequestBody).Raw)
+	key := bodyJson.Get(config.CacheKeyFrom.RequestBody).String()
+	log.Infof("Received New Query: %s", key)
 	if key == "" {
 		log.Debug("parse key from request body failed")
 		return types.ActionContinue
@@ -566,7 +568,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 								}
 								log.Infof("most similar key:%s and the most similar score: %f", most_similar_key, most_similar_score)
 								// ctx.SetContext(CacheKeyContextKey, nil)
-								if most_similar_score < 6000 {
+								if most_similar_score < 1000 {
 									// 发起redis Get 调用
 									config.redisClient.Get(config.CacheKeyPrefix+most_similar_key, func(response resp.Value) {
 										if err := response.Error(); err != nil {
@@ -780,7 +782,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 	}
 	keyI := ctx.GetContext(CacheKeyContextKey)
 	if keyI == nil {
-		log.Infof("1st return chunk")
+		// log.Infof("1st return chunk")
 		return chunk
 	}
 	if !isLastChunk {
@@ -815,10 +817,10 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 				ctx.SetContext(PartialMessageContextKey, nil)
 			}
 		}
-		log.Infof("2st return chunk")
+		// log.Infof("2st return chunk")
 		return chunk
 	}
-	log.Infof("We are in the last chunk")
+	// log.Infof("We are in the last chunk")
 	// last chunk
 	key := keyI.(string)
 	stream := ctx.GetContext(StreamContextKey)
