@@ -478,7 +478,16 @@ func TrimQuote(source string) string {
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log wrapper.Log) types.Action {
 	bodyJson := gjson.ParseBytes(body)
-	log.Infof("body:%s", bodyJson.Raw)
+	// log.Infof("body:%s", bodyJson.Raw)
+	userMessages := bodyJson.Get(`messages.#(role=="user")#.content`)
+	var messages []string
+	for _, result := range userMessages.Array() {
+		messages = append(messages, result.String())
+	}
+	log.Infof("messages:%v", messages)
+
+	// log.Infof("len(messages):%d", len(bodyJson.Get("messages").Array()))
+	len_messages := len(messages)
 	// TODO: It may be necessary to support stream mode determination for different LLM providers.
 	stream := false
 	if bodyJson.Get("stream").Bool() {
@@ -489,7 +498,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	}
 	// key := TrimQuote(bodyJson.Get(config.CacheKeyFrom.RequestBody).Raw)
 	key := bodyJson.Get(config.CacheKeyFrom.RequestBody).String()
-	log.Infof("Received New Query: %s", key)
+	log.Infof("Received New Query: %s with message len: %d", key, len_messages)
 	if key == "" {
 		log.Debug("parse key from request body failed")
 		return types.ActionContinue
@@ -779,7 +788,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wra
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []byte, isLastChunk bool, log wrapper.Log) []byte {
-	log.Infof("We are in onHttpResponseBody")
+	// log.Infof("We are in onHttpResponseBody")
 	if ctx.GetContext(ToolCallsContextKey) != nil {
 		// we should not cache tool call result
 		return chunk
