@@ -478,6 +478,7 @@ func TrimQuote(source string) string {
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log wrapper.Log) types.Action {
 	bodyJson := gjson.ParseBytes(body)
+	log.Infof("body:%s", bodyJson.Raw)
 	// TODO: It may be necessary to support stream mode determination for different LLM providers.
 	stream := false
 	if bodyJson.Get("stream").Bool() {
@@ -568,7 +569,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 								}
 								log.Infof("most similar key:%s and the most similar score: %f", most_similar_key, most_similar_score)
 								// ctx.SetContext(CacheKeyContextKey, nil)
-								if most_similar_score < 1000 {
+								if most_similar_score < 0.0 {
 									// 发起redis Get 调用
 									config.redisClient.Get(config.CacheKeyPrefix+most_similar_key, func(response resp.Value) {
 										if err := response.Error(); err != nil {
@@ -578,12 +579,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 											return
 										}
 										if response.IsNull() {
-											log.Warnf("similar call: cache miss, key:%s", most_similar_key)
+											log.Infof("For the query: %s, the most similar key is: %s, score is: %f not hit", key, most_similar_key, most_similar_score)
+											// log.Warnf("similar call: cache miss, key:%s", most_similar_key)
 											// ctx.SetContext(CacheKeyContextKey, nil)
 											proxywasm.ResumeHttpRequest()
 											return
 										}
-										log.Warnf("similar call: cache hit, key:%s", most_similar_key)
+										// log.Warnf("similar call: cache hit, key:%s", most_similar_key)
+										log.Infof("For the query: %s, the most similar key is: %s, score is: %f  hit !!!", key, most_similar_key, most_similar_score)
 										ctx.SetContext(CacheKeyContextKey, nil)
 										if !stream {
 											proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
@@ -592,6 +595,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 										}
 									})
 								}
+								log.Infof("For the query: %s, the most similar key is: %s, score is: %f, too high, skip!!!", key, most_similar_key, most_similar_score)
 								proxywasm.ResumeHttpRequest()
 							},
 							100000)
