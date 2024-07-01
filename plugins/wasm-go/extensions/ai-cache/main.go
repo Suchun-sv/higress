@@ -4,17 +4,21 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/wrapper"
+	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/resp"
+	"golang.org/x/net/html/charset"
 )
 
 const (
@@ -25,7 +29,10 @@ const (
 	StreamContextKey         = "stream"
 	DefaultCacheKeyPrefix    = "higress-ai-cache:"
 	QueryStringKey           = "queryString"
+	QueryHistoryStringKey    = "queryHistoryString"
+	HistoryStringKey         = "historyString"
 	QueryEmbeddingKey        = "query-embedding"
+	QueryHistoryEmbeddingKey = "query-history-embedding"
 )
 
 func main() {
@@ -111,6 +118,8 @@ type PluginConfig struct {
 	// @Title zh-CN DashVector 阿里云向量搜索引擎
 	// @Description zh-CN 调用阿里云的向量搜索引擎
 	DashVectorInfo DashVectorInfo `required:"true" yaml:"dashvector" json:"dashvector"`
+
+	SessionID string `yaml:"SessionID" json:"SessionID"`
 	// @Title zh-CN Redis 地址信息
 	// @Description zh-CN 用于存储缓存结果的 Redis 地址
 	RedisInfo RedisInfo `required:"true" yaml:"redis" json:"redis"`
@@ -265,6 +274,8 @@ type QueryResponse struct {
 type QueryRequest struct {
 	Vector        []float64 `json:"vector"`
 	TopK          int       `json:"topk"`
+	Filter        string    `json:"filter"`
+	Output_fields []string  `json:"output_fields"`
 	IncludeVector bool      `json:"include_vector"`
 }
 
@@ -275,12 +286,14 @@ type Result struct {
 	Score  float64                `json:"score"`
 }
 
-func PerformQuery(c PluginConfig, vector []float64) (string, []byte, [][2]string, error) {
+func PerformQuery(c PluginConfig, vector []float64, session_id string, query_type string) (string, []byte, [][2]string, error) {
 	url := fmt.Sprintf("/v1/collections/%s/query", c.DashVectorInfo.DashVectorCollection)
 
 	requestData := QueryRequest{
 		Vector:        vector,
 		TopK:          1,
+		Filter:        fmt.Sprintf("session_id = \"%s\" and query_type = \"%s\"", session_id, query_type),
+		Output_fields: []string{"query", "history", "chat_id", "query_type"},
 		IncludeVector: true,
 	}
 
@@ -371,7 +384,10 @@ func InsertDocuments(c *PluginConfig, log wrapper.Log, docs []Document) error {
 }
 
 func parseConfig(json gjson.Result, c *PluginConfig, log wrapper.Log) error {
+	// c.SessionID = uuid.New().String()
+	c.SessionID = json.Get("dashvector.SessionID").String()
 	log.Infof("config:%s", json.Raw)
+	log.Infof("session id:%s", c.SessionID)
 	c.DashVectorInfo.DashScopeKey = json.Get("dashvector.DashScopeKey").String()
 	log.Infof("dash scope key:%s", c.DashVectorInfo.DashScopeKey)
 	if c.DashVectorInfo.DashScopeKey == "" {
@@ -476,18 +492,97 @@ func TrimQuote(source string) string {
 	return strings.Trim(source, `"`)
 }
 
+// generateKeyHistory 生成基于给定消息和键的历史键
+func generateKeyHistory(messages []string, key string) string {
+	var builder strings.Builder
+	builder.WriteString("history:")
+
+	// 添加除最后一个之外的所有消息
+	if len(messages) > 1 {
+		builder.WriteString(strings.Join(messages[:len(messages)-1], ""))
+	}
+
+	builder.WriteString("user question:")
+
+	// 将key字符串重复多次，次数与messages的长度相同
+	for i := 0; i < len(messages); i++ {
+		builder.WriteString(key)
+	}
+
+	return builder.String()
+}
+
+type LogData struct {
+	SessionID             string   `json:"Session_ID"`
+	NewQuery              string   `json:"New_Query"`
+	Message               []string `json:"message"`
+	ChatID                string   `json:"chat_id"`
+	KeyQueryString        string   `json:"key_query_string"`
+	KeyHistoryQueryString string   `json:"key_history_query_string"`
+	KeyQueryScore         float64  `json:"key_query_score"`
+	KeyHistoryQueryScore  float64  `json:"key_history_query_score"`
+	KeyChatID             string   `json:"key_chat_id"`
+	KeyHistoryChatID      string   `json:"key_history_chat_id"`
+	CacheType             int      `json:"cache_type"`
+	FinalChatQuery        string   `json:"final_chat_query"`
+	GetChatID             string   `json:"get_chat_id"`
+}
+
+// func updateLogData(logData *LogData, keyHistoryResp, keyResp any, keyHisChatID string, cacheType int, finalChatQuery, getChatID, keyChatID string) {
+// 	// Assuming keyHistoryResp and keyResp are accessible and have the required fields
+// 	logData.KeyHistoryQueryString = keyHistoryResp.(map[string]interface{})["Fields"].(map[string]interface{})["query"].(string)
+// 	logData.KeyHistoryQueryScore = keyHistoryResp.(map[string]interface{})["Score"].(float64)
+// 	logData.KeyHistoryChatID = keyHisChatID
+// 	logData.CacheType = cacheType
+// 	logData.FinalChatQuery = finalChatQuery
+// 	logData.GetChatID = getChatID
+// 	logData.KeyQueryString = keyResp.(map[string]interface{})["Fields"].(map[string]interface{})["query"].(string)
+// 	logData.KeyQueryScore = keyResp.(map[string]interface{})["Score"].(float64)
+// 	logData.KeyChatID = keyChatID
+// }
+
+func updateLogData(log wrapper.Log, logData *LogData, keyquery string, keyscore float64, keyid string, keyhisquery string, keyhisscore float64, keyhisid string, keyHisChatID string, cacheType int, finalChatQuery, getChatID, keyChatID string) {
+	logData.KeyHistoryQueryString = keyhisquery
+	logData.KeyHistoryQueryScore = keyhisscore
+	logData.KeyHistoryChatID = keyhisid
+	logData.KeyQueryString = keyquery
+	logData.KeyQueryScore = keyscore
+	logData.KeyChatID = keyid
+	logData.CacheType = cacheType
+	logData.FinalChatQuery = finalChatQuery
+	logData.GetChatID = getChatID
+}
+
 func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log wrapper.Log) types.Action {
-	bodyJson := gjson.ParseBytes(body)
-	// log.Infof("body:%s", bodyJson.Raw)
+	// 先获取当前请求的唯一ID
+	chat_id := uuid.New().String()
+	ctx.SetContext("chat_id", chat_id)
+	// 获取请求的body
+
+	// 使用charset.NewReaderLabel尝试自动检测并转换编码到UTF-8
+	reader, err := charset.NewReader(bytes.NewReader(body), "")
+	if err != nil {
+		log.Warnf("Failed to convert request body to UTF-8: %v", err)
+		return types.ActionContinue
+	}
+
+	utf8Body, err := ioutil.ReadAll(reader)
+	if err != nil {
+		log.Warnf("Failed to read request body: %v", err)
+		return types.ActionContinue
+	}
+
+	bodyJson := gjson.ParseBytes(utf8Body)
+	// 获取所有的用户消息历史
 	userMessages := bodyJson.Get(`messages.#(role=="user")#.content`)
 	var messages []string
 	for _, result := range userMessages.Array() {
 		messages = append(messages, result.String())
 	}
 	log.Infof("messages:%v", messages)
-
 	// log.Infof("len(messages):%d", len(bodyJson.Get("messages").Array()))
 	len_messages := len(messages)
+
 	// TODO: It may be necessary to support stream mode determination for different LLM providers.
 	stream := false
 	if bodyJson.Get("stream").Bool() {
@@ -498,7 +593,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	}
 	// key := TrimQuote(bodyJson.Get(config.CacheKeyFrom.RequestBody).Raw)
 	key := bodyJson.Get(config.CacheKeyFrom.RequestBody).String()
-	log.Infof("Received New Query: %s with message len: %d", key, len_messages)
+	log.Infof("Received Query: %s with message len: %d", key, len_messages)
 	if key == "" {
 		log.Debug("parse key from request body failed")
 		return types.ActionContinue
@@ -507,203 +602,198 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	// vector_initialize(gjson.Result{}, &config, log)
 	ctx.SetContext(CacheKeyContextKey, key)
 	ctx.SetContext(QueryStringKey, key)
-	queryString := key
-	// texts := []string{queryString}
-	// log.Infof("fetching embeddings for key:%s", key)
-	// resp_answer, err_ := FetchTextEmbeddings(&config, log, texts)
+	ctx.SetContext(QueryHistoryStringKey, generateKeyHistory(messages, key))
+	ctx.SetContext(HistoryStringKey, strings.Join(messages, ""))
 
-	Emb_url, Emb_requestBody, Emb_headers := FetchTextEmbeddings(&config, log, []string{queryString})
+	key_histoy := generateKeyHistory(messages, key)
+	Emb_url, Emb_requestBody, Emb_headers := FetchTextEmbeddings(&config, log, []string{key, key_histoy})
+	// 首先query query_string 和 query_history 两个key的embedding
 
-	// if redis.get(key) == nil:
-	//    Emb = dashvector.post(url, requestBody, headers)
-	// 	  redis.set(key, Emb)
-	// 	  Most_similar = dashvector.post(url, requestBody, headers)
-	//    send_key_post
-	// 	  return Most_similar
-	// else:
-	//    resp = redis.get(key)
-	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-		if err := response.Error(); err != nil || response.IsNull() {
-			if err != nil {
-				log.Infof("redis get key:%s failed, err:%v", key, err)
-			}
-			if response.IsNull() {
-				log.Infof("cache miss, key:%s", key)
-			}
-			// 开始调用embedding
-			log.Infof("Start to fetch embeddings for key:%s", key)
-			config.DashVectorInfo.DashScopeClient.Post(
-				Emb_url,
-				Emb_headers,
-				Emb_requestBody,
-				func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-					// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-					log.Infof("The statusCode for fetching %s is %d", key, statusCode)
-					if statusCode != 200 {
-						log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-						// result = nil
-						ctx.SetContext(QueryEmbeddingKey, nil)
-					} else {
-						log.Infof("Successfully fetched embeddings for key:%s", key)
-						Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
-						Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
-						ctx.SetContext(QueryEmbeddingKey, Text_embedding)
-						// 请求向量数据库获取最近的score
-						vector_url, vector_request, vector_headers, err := PerformQuery(config, Text_embedding)
-						if err != nil {
-							log.Errorf("Failed to perform query, err: %v", err)
+	var logData = LogData{
+		SessionID:             config.SessionID,
+		NewQuery:              key,
+		Message:               messages,
+		ChatID:                chat_id,
+		KeyQueryString:        "",
+		KeyHistoryQueryString: "",
+		KeyQueryScore:         0.999,
+		KeyHistoryQueryScore:  0.999,
+		KeyChatID:             "",
+		KeyHistoryChatID:      "",
+		CacheType:             -1,
+		FinalChatQuery:        "",
+		GetChatID:             "",
+	}
+
+	// 开始调用embedding
+	log.Infof("Start to fetch embeddings for key:%s", key)
+	config.DashVectorInfo.DashScopeClient.Post(
+		Emb_url,
+		Emb_headers,
+		Emb_requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			log.Infof("The statusCode for fetching %s is %d", key, statusCode)
+			if statusCode != 200 {
+				log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+				// result = nil
+				ctx.SetContext(QueryEmbeddingKey, nil)
+				ctx.SetContext(QueryHistoryEmbeddingKey, nil)
+			} else {
+				log.Infof("Successfully fetched embeddings for key:%s", key)
+				Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+				Key_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
+				Key_history_embedding := Text_embedding_raw.Output.Embeddings[1].Embedding
+				ctx.SetContext(QueryEmbeddingKey, Key_embedding)
+				ctx.SetContext(QueryHistoryEmbeddingKey, Key_history_embedding)
+				// 先请求key embedding的结果
+				vector_url, vector_request, vector_headers, err := PerformQuery(config, Key_embedding, config.SessionID, "key")
+				if err != nil {
+					log.Errorf("Failed to perform query, err: %v", err)
+					proxywasm.ResumeHttpRequest()
+					return
+				}
+				config.DashVectorInfo.DashVectorClient.Post(
+					vector_url,
+					vector_headers,
+					vector_request,
+					func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+						// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+						log.Infof("The statusCode for querying %s is %d", key, statusCode)
+						query_resp, err_query := ParseQueryResponse(responseBody)
+						if err_query != nil {
+							log.Errorf("Failed to parse response: %v", err)
 							proxywasm.ResumeHttpRequest()
 							return
 						}
+						key_resp := query_resp.Output
+						// 再请求key history embedding的结果
+						vector_url, vector_request, vector_headers, err := PerformQuery(config, Key_history_embedding, config.SessionID, "key+history")
 						config.DashVectorInfo.DashVectorClient.Post(
 							vector_url,
 							vector_headers,
 							vector_request,
 							func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-								// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-								log.Infof("The statusCode for querying %s is %d", key, statusCode)
+								log.Infof("The statusCode for querying %s is %d", key_histoy, statusCode)
 								query_resp, err_query := ParseQueryResponse(responseBody)
+								// log.Infof("The message for query :%v", query_resp)
 								if err_query != nil {
 									log.Errorf("Failed to parse response: %v", err)
 									proxywasm.ResumeHttpRequest()
 									return
 								}
-								most_similar_key := key
-								most_similar_score := 10000.0
-								if len(query_resp.Output) != 0 {
-									most_similar_key = query_resp.Output[0].Fields["query"].(string)
-									most_similar_score = query_resp.Output[0].Score
-								} else {
-									log.Warnf("No similar key found for key:%s", key)
+								key_history_resp := query_resp.Output
+								// 关键处理逻辑
+								// 如果召回的为空，则直接resume
+								// 如果key召回的chat_id和key_history召回的chat_id一致，则尝试从redis中取出cache并返回
+								// 如果key_his召回的score 小于阈值，则尝试取出并返回
+								// 否则，直接resume
+								if len(key_resp) == 0 || len(key_history_resp) == 0 {
+									// log.Infof("Cannot find any similar key for key:%s", key)
+									// log.Infof("Session_ID : [%s] | New Query: %s| message : %v | chat_id : %s | the key_query_string : %s | the key_history_query_string : %s | the key_query_score : %f | the key_history_query_score : %f | the key_chat_id : %s | the key_history_chat_id : %s | the _cache_type : %d | the final chat_query : %s | the get_chat_id : %s", config.SessionID, key, messages, chat_id, "", "", 999.0, 999.0, "", "", -1, "", "")
+									json_logData, _ := json.Marshal(logData)
+									log.Infof("%s", json_logData)
+									proxywasm.ResumeHttpRequest()
+									return
 								}
-								log.Infof("most similar key:%s and the most similar score: %f", most_similar_key, most_similar_score)
-								// ctx.SetContext(CacheKeyContextKey, nil)
-								if most_similar_score < 0.0 {
-									// 发起redis Get 调用
-									config.redisClient.Get(config.CacheKeyPrefix+most_similar_key, func(response resp.Value) {
-										if err := response.Error(); err != nil {
-											log.Warnf("similar call: redis get key:%s failed, err:%v", most_similar_key, err)
-											// ctx.SetContext(CacheKeyContextKey, nil)
-											proxywasm.ResumeHttpRequest()
-											return
-										}
-										if response.IsNull() {
-											log.Infof("For the query: %s, the most similar key is: %s, score is: %f not hit", key, most_similar_key, most_similar_score)
-											// log.Warnf("similar call: cache miss, key:%s", most_similar_key)
-											// ctx.SetContext(CacheKeyContextKey, nil)
-											proxywasm.ResumeHttpRequest()
-											return
-										}
-										// log.Warnf("similar call: cache hit, key:%s", most_similar_key)
-										log.Infof("For the query: %s, the most similar key is: %s, score is: %f  hit !!!", key, most_similar_key, most_similar_score)
-										ctx.SetContext(CacheKeyContextKey, nil)
-										if !stream {
-											proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+								key_query, _ := key_resp[0].Fields["query"].(string), key_history_resp[0].Fields["query"].(string)
+								key_chat_id, key_his_chat_id := key_resp[0].Fields["chat_id"].(string), key_history_resp[0].Fields["chat_id"].(string)
+								var get_chat_id string
+								get_chat_id = ""
+								var get_chat_query string
+								get_chat_query = ""
+								// get_chat_id := nil
+								threshold := 0.01
+								key_score_threshold := 0.18
+								key_his_score_threshold := 0.16
+								byte_len := 12
+								// 	{'threshold': np.float64(0.01),
+								//  'key_his_score_threshold': np.float64(0.17),
+								//  'byte_len': 12}
+								cache_type := 0
+								if key_chat_id == key_his_chat_id {
+									// log.Infof("The chat_id for key:%s and key_history:%s is the same with score %f %f", key_chat_id, key_his_chat_id, key_resp[0].Score, key_history_resp[0].Score)
+									if key_history_resp[0].Score < key_his_score_threshold && key_resp[0].Score < key_score_threshold {
+										cache_type = 1
+										log.Infof("The chat_query for key:%s and key_history_query :%s is the same with score %f %f", key_query, "", key_resp[0].Score, key_history_resp[0].Score)
+										get_chat_id = key_chat_id
+										get_chat_query = key_query
+									} else {
+										cache_type = 2
+										log.Infof("The chat_query is the same but the score for key:%s is large than 0.15", key_chat_id)
+										get_chat_id = ""
+										get_chat_query = ""
+									}
+								} else if key_history_resp[0].Score < threshold {
+									cache_type = 3
+									log.Infof("The score for key_history:%s is less than %f", key_his_chat_id, threshold)
+									get_chat_id = key_his_chat_id
+									get_chat_query = key_history_resp[0].Fields["query"].(string)
+								} else {
+									cache_type = 4
+									log.Infof("The score for key_history:%s is greater than %f", key_his_chat_id, threshold)
+									get_chat_query = ""
+									// updateLogData(log, &logData, key_history_resp[0], key_resp[0], key_his_chat_id, cache_type, get_chat_query, get_chat_id, key_chat_id)
+									updateLogData(log, &logData, key_query, key_resp[0].Score, key_chat_id, key_history_resp[0].Fields["query"].(string), key_history_resp[0].Score, key_his_chat_id, key_his_chat_id, cache_type, get_chat_query, get_chat_id, key_chat_id)
+									json_logData, _ := json.Marshal(logData)
+									log.Infof("%s", json_logData)
+									// log.Infof("Session_ID : [%s] | New Query: %s| message : %v | chat_id : %s | the key_query_string : %s | the key_history_query_string : %s | the key_query_score : %f | the key_history_query_score : %f | the key_chat_id : %s | the key_history_chat_id : %s | the _cache_type : %d | the final chat_query : %s | the get_chat_id : %s", config.SessionID, key, messages, chat_id, key_query, key_history_resp[0].Fields["query"].(string), key_resp[0].Score, key_history_resp[0].Score, key_chat_id, key_his_chat_id, cache_type, get_chat_query, get_chat_id)
+									proxywasm.ResumeHttpRequest()
+									return
+								}
+								log.Infof("The length of key:%s is %d", key, len(key))
+								// cache_type = 5
+								if len(key) < byte_len {
+									cache_type = 5
+									log.Infof("The key is too short, directly resume")
+									get_chat_id = ""
+									get_chat_query = ""
+								}
+								// log.Infof("Session_ID : [%s] | New Query: %s| message : %v | chat_id : %s | the key_query_string : %s | the key_history_query_string : %s | the key_query_score : %f | the key_history_query_score : %f | the key_chat_id : %s | the key_history_chat_id : %s | the _cache_type : %d | the final chat_query : %s | the get_chat_id : %s", config.SessionID, messages, chat_id, key_query, key_history_resp[0].Fields["query"].(string), key_resp[0].Score, key_history_resp[0].Score, key_chat_id, key_his_chat_id, cache_type, get_chat_query, get_chat_id)
+								updateLogData(log, &logData, key_query, key_resp[0].Score, key_chat_id, key_history_resp[0].Fields["query"].(string), key_history_resp[0].Score, key_his_chat_id, key_his_chat_id, cache_type, get_chat_query, get_chat_id, key_chat_id)
+								json_logData, err_json := json.Marshal(logData)
+								if err_json != nil {
+									log.Errorf("Failed to marshal logData: %v", err_json)
+									proxywasm.ResumeHttpRequest()
+									return
+								}
+								log.Infof("%s", json_logData)
+								if get_chat_id != "" {
+									// 发起redis请求调用
+									config.redisClient.Get(config.SessionID+get_chat_id, func(response resp.Value) {
+										if err := response.Error(); err != nil || response.IsNull() {
+											if err != nil {
+												log.Infof("redis get key:%s failed, err:%v", key, err)
+												proxywasm.ResumeHttpRequest()
+												return
+											}
+											if response.IsNull() {
+												log.Infof("cache miss, key:%s", key)
+												proxywasm.ResumeHttpRequest()
+												return
+											}
 										} else {
-											proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+											log.Warnf("cache hit, key:%s", key)
+											ctx.SetContext(CacheKeyContextKey, nil)
+											if !stream {
+												proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+											} else {
+												proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+											}
 										}
 									})
+								} else {
+									proxywasm.ResumeHttpRequest()
+									return
 								}
-								log.Infof("For the query: %s, the most similar key is: %s, score is: %f, too high, skip!!!", key, most_similar_key, most_similar_score)
-								proxywasm.ResumeHttpRequest()
-							},
-							100000)
-					}
-				},
-				10000)
-		} else {
-			log.Warnf("cache hit, key:%s", key)
-			ctx.SetContext(CacheKeyContextKey, nil)
-			if !stream {
-				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-			} else {
-				proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+
+							}, 10000)
+					}, 10000)
 			}
-		}
-	})
-	if err != nil {
-		log.Error("redis access failed")
-		return types.ActionContinue
-	}
+		}, 10000)
+
 	return types.ActionPause
 }
-
-// 获取特征
-// err = config.DashVectorInfo.DashScopeClient.Post(
-// 	Emb_url,
-// 	Emb_headers,
-// 	Emb_requestBody,
-// 	func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-// 		log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-// 		if statusCode != 200 {
-// 			log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-// 			// result = nil
-// 			ctx.SetContext(QueryEmbeddingKey, nil)
-// 			proxywasm.ResumeHttpRequest()
-// 		} else {
-// 			log.Infof("Successfully fetched embeddings for key:%s", key)
-// 			Text_embedding_raw, _ := ParseTextEmbedding(responseBody)
-// 			Text_embedding := Text_embedding_raw.Output.Embeddings[0].Embedding
-// 			ctx.SetContext(CacheKeyContextKey, Text_embedding)
-// 			// 和redis交互
-// 			config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-// 				if err := response.Error(); err != nil {
-// 					log.Warnf("redis get key:%s failed, err:%v", key, err)
-// 					proxywasm.ResumeHttpRequest()
-// 					return
-// 				}
-// 				if response.IsNull() {
-// 					log.Warnf("cache miss, key:%s", key)
-// 					proxywasm.ResumeHttpRequest()
-// 					return
-// 				}
-// 				log.Warnf("cache hit, key:%s", key)
-// 				ctx.SetContext(CacheKeyContextKey, nil)
-// 				if !stream {
-// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-// 				} else {
-// 					proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
-// 				}
-// 			})
-// 		}
-// 	},
-// 	10000,
-// 	// Optional: Specify a timeout (in milliseconds) here if needed, e.g., 5000.
-// )
-
-// if err_ != nil {
-// 	log.Warnf("Error fetching embeddings:%v", err_)
-// 	return types.ActionContinue
-// } else {
-// 	log.Infof("Successfully fetched embeddings for %v", resp_answer)
-// }
-
-// ctx.SetContext(CacheKeyContextKey, key)
-// err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-// 	if err := response.Error(); err != nil {
-// 		log.Warnf("redis get key:%s failed, err:%v", key, err)
-// 		proxywasm.ResumeHttpRequest()
-// 		return
-// 	}
-// 	if response.IsNull() {
-// 		log.Warnf("cache miss, key:%s", key)
-// 		proxywasm.ResumeHttpRequest()
-// 		return
-// 	}
-// 	log.Warnf("cache hit, key:%s", key)
-// 	ctx.SetContext(CacheKeyContextKey, nil)
-// 	if !stream {
-// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
-// 	} else {
-// 		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
-// 	}
-// })
-// if err != nil {
-// log.Error("redis access failed")
-// return types.ActionContinue
-// }
-// 	return types.ActionPause
-// }
 
 func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage string, log wrapper.Log) string {
 	subMessages := strings.Split(sseMessage, "\n")
@@ -742,6 +832,7 @@ func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage 
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log) types.Action {
 	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
+	log.Infof("This is onHttpResponseHeaders, content-type:%s", contentType)
 	if strings.Contains(contentType, "text/event-stream") {
 		ctx.SetContext(StreamContextKey, struct{}{})
 	}
@@ -749,14 +840,40 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wra
 	if ctx.GetContext(CacheKeyContextKey) == nil {
 		return types.ActionContinue
 	}
+	// log.Infof("I am now in here 1")
 
-	doc := Document{
+	// log.Infof("Test QueryEmbeddingKey: %v", ctx.GetContext(QueryEmbeddingKey))
+	// log.Infof("Test QueryStringKey: %s", ctx.GetContext(QueryStringKey).(string))
+	// log.Infof("Test QueryHistoryStringKey: %s", ctx.GetContext(QueryHistoryStringKey).(string))
+	// log.Infof("Test HistoryStringKey: %v", ctx.GetContext(HistoryStringKey))
+	// log.Infof("Test chat_id: %s", ctx.GetContext("chat_id").(string))
+	key_doc := Document{
 		Vector: ctx.GetContext(QueryEmbeddingKey).([]float64),
 		Fields: map[string]string{
-			"query": ctx.GetContext(QueryStringKey).(string),
+			"query":      ctx.GetContext(QueryStringKey).(string),
+			"history":    ctx.GetContext(HistoryStringKey).(string),
+			"session_id": config.SessionID,
+			"chat_id":    ctx.GetContext("chat_id").(string),
+			"query_type": "key",
 		},
 	}
-	InsertDocumentsBody, _ := json.Marshal(InsertRequest{Docs: []Document{doc}})
+	// log.Infof("I am now in here 2")
+
+	key_his_doc := Document{
+		Vector: ctx.GetContext(QueryHistoryEmbeddingKey).([]float64),
+		Fields: map[string]string{
+			"query":      ctx.GetContext(QueryHistoryStringKey).(string),
+			"history":    ctx.GetContext(HistoryStringKey).(string),
+			"session_id": config.SessionID,
+			"chat_id":    ctx.GetContext("chat_id").(string),
+			"query_type": "key+history",
+		},
+	}
+	// log.Infof("I am now in here 3")
+
+	InsertDocumentsBody, _ := json.Marshal(InsertRequest{Docs: []Document{key_doc, key_his_doc}})
+
+	// log.Infof("I am now in here 4")
 
 	key := ctx.GetContext(QueryStringKey)
 	// query_embedding := ctx.GetContext(QueryEmbeddingKey)
@@ -775,6 +892,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log wra
 				proxywasm.ResumeHttpResponse()
 				return
 			} else {
+				log.Infof("responseBody:%s", gjson.ParseBytes(responseBody).Raw)
 				log.Infof("Successfully inserted documents for key: %s", key)
 				proxywasm.ResumeHttpResponse()
 				return
@@ -830,11 +948,8 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 				ctx.SetContext(PartialMessageContextKey, nil)
 			}
 		}
-		// log.Infof("2st return chunk")
 		return chunk
 	}
-	// log.Infof("We are in the last chunk")
-	// last chunk
 	key := keyI.(string)
 	stream := ctx.GetContext(StreamContextKey)
 	var value string
@@ -896,17 +1011,24 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk []by
 	// 			}
 	// 		})
 	// })
-	log.Infof("Start to set key %s to value %s to the redis", key, value)
-	config.redisClient.Set(config.CacheKeyPrefix+key, value, func(response resp.Value) {
-		if err := response.Error(); err != nil {
-			log.Warnf("redis set key:%s failed, err:%v", key, err)
-			return
-		} else {
-			log.Infof("Successfully set key %s to value %s", key, value)
+	log.Infof("Start to set key %s to the redis", key)
+	// config.redisClient.Set(config.CacheKeyPrefix+key, value, func(response resp.Value) {
+	var chat_id string
+	if ctx.GetContext("chat_id") != nil {
+		chat_id = ctx.GetContext("chat_id").(string)
+		config.redisClient.Set(config.SessionID+chat_id, value, func(response resp.Value) {
+			if err := response.Error(); err != nil {
+				log.Warnf("redis set key:%s failed, err:%v", key, err)
+				return
+			} else {
+				log.Infof("Successfully set key %s to value %s", key, value)
+			}
+		})
+		if config.CacheTTL != 0 {
+			config.redisClient.Expire(config.CacheKeyPrefix+key, config.CacheTTL, nil)
 		}
-	})
-	if config.CacheTTL != 0 {
-		config.redisClient.Expire(config.CacheKeyPrefix+key, config.CacheTTL, nil)
+	} else {
+		log.Warnf("chat_id is nil")
 	}
 	return chunk
 	// return types.ActionPause
