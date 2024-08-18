@@ -210,6 +210,7 @@ type LogData struct {
 	RawBody               string    `json:"raw_body"`
 	KeyEmbedding          []float64 `json:"key_embedding"`
 	KeyHistoryEmbedding   []float64 `json:"key_history_embedding"`
+	QueryReasonList       []string  `json:"query_reason_list"`
 }
 
 func ConstructTextEmbeddingParameters(c *PluginConfig, log wrapper.Log, texts []string) (string, []byte, [][2]string) {
@@ -994,7 +995,7 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 					"reasonList": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "候选问题的列表",
+						"description": "选或者不选的理由列表，每个元素是一个字符串, 注意按照提问的顺序来填写",
 					},
 					"finalAnswer": map[string]interface{}{
 						"type":        "integer",
@@ -1016,6 +1017,7 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 			// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
 			queryAns, reasonList, err := ParseChatCompletionResponseOpenai(responseBody, log)
 			log.Infof("statusCode:%d, queryAns:%d, reasonList:%v", statusCode, queryAns, reasonList)
+			config.LogData.QueryReasonList = reasonList
 			if err != nil {
 				log.Errorf("Failed to parse response: %v", err)
 				logAndResume(ctx, config, log)
@@ -1228,8 +1230,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		FinalChatQuery:        "",
 		GetChatID:             "",
 		RawBody:               "",
-		KeyEmbedding:          []float64{0.0},
-		KeyHistoryEmbedding:   []float64{0.0},
+		QueryReasonList:       []string{},
 	}
 	// TODO: It may be necessary to support stream mode determination for different LLM providers.
 	stream := false
