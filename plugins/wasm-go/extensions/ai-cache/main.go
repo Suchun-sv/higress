@@ -294,7 +294,69 @@ func ParseTextEmbedding(responseBody []byte) (*Response, error) {
 
 // }
 
-func ConstructAskLLMParameters(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, jsonSchema map[string]interface{}) (string, []byte, [][2]string) {
+func ConstructAskLLMParameters(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, useDoc bool) (string, []byte, [][2]string) {
+	url := "/compatible-mode/v1/chat/completions"
+	messages := []map[string]string{}
+	if useDoc {
+		messages = []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are a helpful assistant.",
+			},
+			{
+				"role":    "system",
+				"content": "fileid://file-fe-6w49htSQwD8vwMqDU6JhkKXV",
+			},
+			{
+				"role":    "user",
+				"content": content,
+			},
+		}
+	} else {
+		messages = []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are a helpful assistant.",
+			},
+			{
+				"role":    "user",
+				"content": content,
+			},
+		}
+	}
+	requestData := map[string]interface{}{
+		"model":    "qwen-long",
+		"messages": messages,
+		// "messages": []map[string]string{
+		// 	{
+		// 		"role":    "system",
+		// 		"content": "You are a helpful assistant.",
+		// 	},
+		// 	{
+		// 		"role":    "system",
+		// 		"content": "fileid://file-fe-6w49htSQwD8vwMqDU6JhkKXV",
+		// 	},
+		// 	{
+		// 		"role": "user",
+		// 		// "content": fmt.Sprintf("已经知道 有问题1: \"%s\", 问题2:\"%s\", 问题1和问题2是同一个问题吗？注意动词之间的细微区别！！！只回答Yes或No！！！其他任何都不许回复,问题1和问题2是同一个问题吗？注意动词之间的细微区别！！！只回答Yes或No！！！其他任何都不许回复,问题1和问题2是同一个问题吗？注意动词之间的细微区别！！！只回答Yes或No！！！其他任何都不许回复", key1, key2),
+		// 		"content": content,
+		// 	},
+		// },
+	}
+
+	requestBody, err := json.Marshal(requestData)
+	if err != nil {
+		log.Errorf("Failed to marshal request data: %v", err)
+	}
+
+	header := [][2]string{
+		{"Content-Type", "application/json"},
+		{"Authorization", "Bearer " + c.DashVectorInfo.DashScopeKey},
+	}
+	return url, requestBody, header
+}
+
+func ConstructAskLLMParametersOpenai(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, jsonSchema map[string]interface{}) (string, []byte, [][2]string) {
 	url := "/v1/chat/completions"
 
 	// 将 jsonSchema 转换为 JSON 字符串
