@@ -82,6 +82,12 @@ type DashVectorInfo struct {
 	DashScopeClient       wrapper.HttpClient `yaml:"-" json:"-"`
 }
 
+type OpenaiInfo struct {
+	OpenaiServiceName string             `required:"true" yaml:"openaiServiceName" json:"openaiServiceName"`
+	OpenaiKey         string             `required:"true" yaml:"openaiKey" json:"openaiKey"`
+	OpenaiClient      wrapper.HttpClient `yaml:"-" json:"-"`
+}
+
 type KVExtractor struct {
 	// @Title zh-CN 从请求 Body 中基于 [GJSON PATH](https://github.com/tidwall/gjson/blob/master/SYNTAX.md) 语法提取字符串
 	RequestBody string `required:"false" yaml:"requestBody" json:"requestBody"`
@@ -93,6 +99,8 @@ type PluginConfig struct {
 	// @Title zh-CN DashVector 阿里云向量搜索引擎
 	// @Description zh-CN 调用阿里云的向量搜索引擎
 	DashVectorInfo DashVectorInfo `required:"true" yaml:"dashvector" json:"dashvector"`
+
+	OpenaiInfo OpenaiInfo `required:"true" yaml:"openai" json:"openai"`
 
 	SessionID string `yaml:"-" json:"-"`
 	// @Title zh-CN Redis 地址信息
@@ -285,54 +293,57 @@ func ParseTextEmbedding(responseBody []byte) (*Response, error) {
 
 // }
 
-func ConstructAskLLMParameters(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, useDoc bool) (string, []byte, [][2]string) {
-	url := "/compatible-mode/v1/chat/completions"
-	messages := []map[string]string{}
-	if useDoc {
-		messages = []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a helpful assistant.",
-			},
-			{
-				"role":    "system",
-				"content": "fileid://file-fe-6w49htSQwD8vwMqDU6JhkKXV",
-			},
-			{
-				"role":    "user",
-				"content": content,
-			},
-		}
-	} else {
-		messages = []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a helpful assistant.",
-			},
-			{
-				"role":    "user",
-				"content": content,
-			},
-		}
+func ConstructAskLLMParameters(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, jsonSchema map[string]interface{}) (string, []byte, [][2]string) {
+	url := "/v1/chat/completions"
+
+	// 将 jsonSchema 转换为 JSON 字符串
+	jsonSchemaStr, err := json.Marshal(jsonSchema)
+	if err != nil {
+		// 处理 JSON 序列化错误
+		log.Infof("JSON Schema 序列化错误: %v\n", err)
+		jsonSchemaStr = []byte("")
+	}
+	messages := []map[string]string{
+		{
+			"role": "system",
+			"content": `
+			假设你是一个初学者，要学习Higress, 你提了一些问题，但是有些问题可能是同一个问题，只是表达方式不同。
+			前提：
+			正例:
+			"打开配置"和"启用配置"是一个意思。
+			"激活 Higress 控制台的监控聚合？" 和 “为 Higress Console 启用监控聚合？” 是一个意思！！！
+			"设置"和"指定"是一个意思。
+			配置管理器 和 设置管理器 是一个意思。
+			配置证书管理器 和 设置证书管理器 是一个意思。
+			“配置 ImagePullSecrets”和“添加 ImagePullSecrets”是一个意思，
+			token有效期和时间限制是一个意思.
+			用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 和 用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？ 是一个意思！！！
+			反例:
+			"JWT Token "只属于一种token，不等同于"token"。
+			JWT Token 和 token 不是一个意思，不能直接替换。
+			RootNamespace 和 命令空间不是一个意思。
+			"启用 Certmanager？" 和 "设置证书管理器？" 不是一个意思！！！
+			"Higress 设置指定的命名空间？" 和 “Higress Controller 监听的命名空间？” 不是一个意思！！！
+			"Pod 自动缩放" 和 “Gateway 自动缩放” 不是一个意思！！！
+			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
+			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
+			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
+			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！`,
+		},
+		{
+			"role":    "user",
+			"content": content,
+		},
 	}
 	requestData := map[string]interface{}{
-		"model":    "qwen-long",
+		"model":    "gpt-4o-2024-08-06",
 		"messages": messages,
-		// "messages": []map[string]string{
-		// 	{
-		// 		"role":    "system",
-		// 		"content": "You are a helpful assistant.",
-		// 	},
-		// 	{
-		// 		"role":    "system",
-		// 		"content": "fileid://file-fe-6w49htSQwD8vwMqDU6JhkKXV",
-		// 	},
-		// 	{
-		// 		"role": "user",
-		// 		// "content": fmt.Sprintf("已经知道 有问题1: \"%s\", 问题2:\"%s\", 问题1和问题2是同一个问题吗？注意动词之间的细微区别！！！只回答Yes或No！！！其他任何都不许回复,问题1和问题2是同一个问题吗？注意动词之间的细微区别！！！只回答Yes或No！！！其他任何都不许回复,问题1和问题2是同一个问题吗？注意动词之间的细微区别！！！只回答Yes或No！！！其他任何都不许回复", key1, key2),
-		// 		"content": content,
-		// 	},
-		// },
+	}
+	if len(jsonSchemaStr) > 0 {
+		requestData["response_format"] = jsonSchema
 	}
 
 	requestBody, err := json.Marshal(requestData)
@@ -342,7 +353,7 @@ func ConstructAskLLMParameters(c PluginConfig, ctx wrapper.HttpContext, log wrap
 
 	header := [][2]string{
 		{"Content-Type", "application/json"},
-		{"Authorization", "Bearer " + c.DashVectorInfo.DashScopeKey},
+		{"Authorization", "Bearer " + c.OpenaiInfo.OpenaiKey},
 	}
 	return url, requestBody, header
 }
@@ -362,6 +373,33 @@ func ParseChatCompletionResponse(jsonData []byte) (string, error) {
 	}
 
 	return "", fmt.Errorf("no content available in response")
+}
+
+func ParseChatCompletionResponseOpenai(responseBody []byte, log wrapper.Log) (int, []string, error) {
+	// 将 responseBody 转换为字符串
+	jsonData := string(responseBody)
+
+	// 使用 gjson 提取 content 字段
+	content := gjson.Get(jsonData, "choices.0.message.content")
+	if !content.Exists() {
+		return 0, nil, fmt.Errorf("content not found in the response")
+	}
+	log.Infof("content:%s", content.String())
+
+	// 直接解析 content 字符串为 JSON 对象
+	contentJson := content.String()
+
+	// 使用 gjson 提取 finalAnswer 和 reasonList
+	finalAnswer := gjson.Get(contentJson, "finalAnswer").Int()
+	reasonList := gjson.Get(contentJson, "reasonList").Array()
+
+	// 转换 reasonList 为 []string
+	reasons := make([]string, len(reasonList))
+	for i, item := range reasonList {
+		reasons[i] = item.String()
+	}
+
+	return int(finalAnswer), reasons, nil
 }
 
 func ConstructEmbeddingQueryParameters(c PluginConfig, vector []float64, filterCommand string, includeVector bool, topK int) (string, []byte, [][2]string, error) {
@@ -447,6 +485,13 @@ func parseConfig(json gjson.Result, c *PluginConfig, log wrapper.Log) error {
 	c.ReturnTest = json.Get("returnTest").Bool()
 	c.SessionID = json.Get("SessionID").String()
 	log.Infof("config:%s", json.Raw)
+	c.OpenaiInfo.OpenaiServiceName = json.Get("openai.serviceName").String()
+	c.OpenaiInfo.OpenaiKey = json.Get("openai.openaiKey").String()
+	c.OpenaiInfo.OpenaiClient = wrapper.NewClusterClient(wrapper.DnsCluster{
+		ServiceName: c.OpenaiInfo.OpenaiServiceName,
+		Port:        443,
+		Domain:      "api.openai.com",
+	})
 	c.DashVectorInfo.DashScopeKey = json.Get("embeddingProvider.DashScopeKey").String()
 	log.Infof("dash scope key:%s", c.DashVectorInfo.DashScopeKey)
 	if c.DashVectorInfo.DashScopeKey == "" {
@@ -570,12 +615,7 @@ func redisSearchHandler(key string, ctx wrapper.HttpContext, config PluginConfig
 	redisKey := config.SessionID + key
 	config.redisClient.Get(redisKey, func(response resp.Value) {
 		if err := response.Error(); err == nil && !response.IsNull() {
-			if ifUseEmbedding {
-				log.Warnf("Strict resume, since it cannot be directly same for key:%s", key)
-				proxywasm.ResumeHttpRequest()
-			} else {
-				handleCacheHit(key, response, stream, ctx, config, log)
-			}
+			handleCacheHit(key, response, stream, ctx, config, log)
 		} else {
 			// log.Warnf("cache miss, key:%s", key)
 			if ifUseEmbedding {
@@ -798,7 +838,7 @@ func askLLMForRefineQuery(ctx wrapper.HttpContext, config PluginConfig, log wrap
 		key,
 	)
 	log.Infof("content:%s", content)
-	url, requestBody, header := ConstructAskLLMParameters(config, ctx, log, content, false)
+	url, requestBody, header := ConstructAskLLMParameters(config, ctx, log, content, nil)
 	config.DashVectorInfo.DashScopeClient.Post(
 		url,
 		header,
@@ -826,6 +866,93 @@ func askLLMForRefineQuery(ctx wrapper.HttpContext, config PluginConfig, log wrap
 	)
 }
 
+// func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, key1 string, key2List queryList, index int, textEmbedding []float64) {
+// 	// log.Infof("len(key2List):%d, index:%d", len(key2List.key), index)
+// 	if index == len(key2List.key) {
+// 		log.Warnf("no key match, exit, cacheType:-3")
+// 		config.LogData.CacheType = -3
+// 		uploadQueryEmbedding(ctx, config, log, key1, textEmbedding)
+// 		// logAndResume(ctx, config, log)
+// 		return
+// 	}
+
+// 	key2 := key2List.key[index]
+// 	config.LogData.KeyQueryString = key2
+// 	config.LogData.KeyChatID = key2List.chatId[index]
+// 	config.LogData.KeyQueryScore = key2List.score[index]
+
+// 	content := fmt.Sprintf(
+// 		`
+// 	假设你是一个初学者，要学习Higress, 你提了一些问题，但是有些问题可能是同一个问题，只是表达方式不同。
+// 	前提：
+// 	正例:
+// 	"打开配置"和"启用配置"是一个意思。
+// 	"激活 Higress 控制台的监控聚合？" 和 “为 Higress Console 启用监控聚合？” 是一个意思！！！
+// 	"设置"和"指定"是一个意思。
+// 	配置管理器 和 设置管理器 是一个意思。
+// 	配置证书管理器 和 设置证书管理器 是一个意思。
+// 	“配置 ImagePullSecrets”和“添加 ImagePullSecrets”是一个意思，
+// 	token有效期和时间限制是一个意思.
+// 	用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 和 用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？ 是一个意思！！！
+// 	反例:
+// 	"JWT Token "只属于一种token，不等同于"token"。
+// 	JWT Token 和 token 不是一个意思，不能直接替换。
+// 	RootNamespace 和 命令空间不是一个意思。
+// 	"启用 Certmanager？" 和 "设置证书管理器？" 不是一个意思！！！
+// 	"Higress 设置指定的命名空间？" 和 “Higress Controller 监听的命名空间？” 不是一个意思！！！
+// 	"Pod 自动缩放" 和 “Gateway 自动缩放” 不是一个意思！！！
+// 	用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
+// 	用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
+// 	用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
+// 	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+// 	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+// 	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+// 	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+
+// 	问题1: “%s”,
+// 	问题2: “%s”,
+
+// 	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
+
+// 	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
+
+// 	根据以上前提,问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！`,
+// 		key1, key2)
+// 	url, requestBody, header := ConstructAskLLMParameters(config, ctx, log, content, false)
+// 	config.DashVectorInfo.DashScopeClient.Post(
+// 		url,
+// 		header,
+// 		requestBody,
+// 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+// 			queryAns, err := ParseChatCompletionResponse(responseBody)
+// 			log.Infof("statusCode:%d, queryAns:%s", statusCode, queryAns)
+// 			if err != nil {
+// 				log.Errorf("Failed to parse response: %v", err)
+// 				logAndResume(ctx, config, log)
+// 				return
+// 			}
+// 			keyMatch := true
+// 			// if queryAns == "Yes" || queryAns == "yes" {
+// 			// 	keyMatch = true
+// 			// }
+// 			if strings.Contains(strings.ToLower(queryAns), "no") {
+// 				keyMatch = false
+// 			}
+// 			if keyMatch && key2List.score[index] < 10000 {
+// 				config.LogData.CacheType = 4
+// 				config.LogData.FinalChatQuery = key2
+// 				config.LogData.GetChatID = config.LogData.KeyChatID
+// 				ctx.SetContext(CacheKeyContextKey, nil)
+// 				redisSearchHandler(key2, ctx, config, log, false, false)
+// 				// logAndReturn(config, log, false, key2)
+// 			} else {
+// 				askLLMForRank(ctx, config, log, key1, key2List, index+1, textEmbedding)
+// 			}
+// 		},
+// 		100000,
+// 	)
+// }
+
 func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, key1 string, key2List queryList, index int, textEmbedding []float64) {
 	// log.Infof("len(key2List):%d, index:%d", len(key2List.key), index)
 	if index == len(key2List.key) {
@@ -841,62 +968,66 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 	config.LogData.KeyChatID = key2List.chatId[index]
 	config.LogData.KeyQueryScore = key2List.score[index]
 
+	// 创建一个字符串来存储索引和值
+	var sb strings.Builder
+	for i, val := range key2List.query {
+		sb.WriteString(fmt.Sprintf("index %d: %s, ", i, val))
+	}
+	// 去掉最后一个多余的逗号和空格
+	queryList := strings.TrimSuffix(sb.String(), ", ")
+
 	content := fmt.Sprintf(
-		`
-	假设你是一个初学者，要学习Higress, 你提了一些问题，但是有些问题可能是同一个问题，只是表达方式不同。
-	前提：
-	正例:
-	"打开配置"和"启用配置"是一个意思。
-	"激活 Higress 控制台的监控聚合？" 和 “为 Higress Console 启用监控聚合？” 是一个意思！！！
-	"设置"和"指定"是一个意思。
-	配置管理器 和 设置管理器 是一个意思。
-	配置证书管理器 和 设置证书管理器 是一个意思。
-	“配置 ImagePullSecrets”和“添加 ImagePullSecrets”是一个意思，
-	token有效期和时间限制是一个意思.
-	用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 和 用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？ 是一个意思！！！
-	反例:
-	"JWT Token "只属于一种token，不等同于"token"。
-	JWT Token 和 token 不是一个意思，不能直接替换。
-	RootNamespace 和 命令空间不是一个意思。
-	"启用 Certmanager？" 和 "设置证书管理器？" 不是一个意思！！！
-	"Higress 设置指定的命名空间？" 和 “Higress Controller 监听的命名空间？” 不是一个意思！！！
-	"Pod 自动缩放" 和 “Gateway 自动缩放” 不是一个意思！！！
-	用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-	用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-	用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-	用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
+		`给定Query问题%s, 和候选问题列表%s, 请问其中有回答和Query问题相同的问题吗？
+		给出从0开始的问题的序号，如果同时有两个问题和Query相同，回复序号较小的，若所有问题都不同，请回复-1`, key1, queryList)
 
-	问题1: “%s”,
-	问题2: “%s”,
-	
-	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
+	// 动态计算 maximum 值
+	// maximumValue := len(key2List.query) - 1
 
-	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
-	
-	根据以上前提,问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！`,
-		key1, key2)
-	url, requestBody, header := ConstructAskLLMParameters(config, ctx, log, content, false)
-	config.DashVectorInfo.DashScopeClient.Post(
+	jsonSchema := map[string]interface{}{
+		"type": "json_schema",
+		"json_schema": map[string]interface{}{
+			"name":   "AskLLMForRank",
+			"strict": true,
+			"schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"reasonList": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "候选问题的列表",
+					},
+					"finalAnswer": map[string]interface{}{
+						"type":        "integer",
+						"description": "最终的答案，必须为-1到reasonList的最大索引之间的整数",
+					},
+				},
+				"required":             []string{"reasonList", "finalAnswer"},
+				"additionalProperties": false,
+			},
+		},
+	}
+
+	url, requestBody, header := ConstructAskLLMParameters(config, ctx, log, content, jsonSchema)
+	config.OpenaiInfo.OpenaiClient.Post(
 		url,
 		header,
 		requestBody,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-			queryAns, err := ParseChatCompletionResponse(responseBody)
-			log.Infof("statusCode:%d, queryAns:%s", statusCode, queryAns)
+			// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			queryAns, reasonList, err := ParseChatCompletionResponseOpenai(responseBody, log)
+			log.Infof("statusCode:%d, queryAns:%d, reasonList:%v", statusCode, queryAns, reasonList)
 			if err != nil {
 				log.Errorf("Failed to parse response: %v", err)
 				logAndResume(ctx, config, log)
 				return
 			}
-			keyMatch := true
-			// if queryAns == "Yes" || queryAns == "yes" {
-			// 	keyMatch = true
-			// }
-			if strings.Contains(strings.ToLower(queryAns), "no") {
+			keyMatch := false
+			index := 0
+			if queryAns == -1 || queryAns >= len(key2List.query) {
 				keyMatch = false
+			} else {
+				keyMatch = true
+				index = queryAns
 			}
 			if keyMatch && key2List.score[index] < 10000 {
 				config.LogData.CacheType = 4
@@ -906,7 +1037,9 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 				redisSearchHandler(key2, ctx, config, log, false, false)
 				// logAndReturn(config, log, false, key2)
 			} else {
-				askLLMForRank(ctx, config, log, key1, key2List, index+1, textEmbedding)
+				log.Warnf("no key match, exit, cacheType:-3")
+				config.LogData.CacheType = -3
+				uploadQueryEmbedding(ctx, config, log, key1, textEmbedding)
 			}
 		},
 		100000,
