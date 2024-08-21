@@ -34,7 +34,7 @@ LLM响应结构化插件，用于根据默认或用户配置的Json Schema对AI�
 
 ## 请求示例
 
-```json
+```bash
 curl -X POST "http://localhost:8001/v1/chat/completions" \
 -H "Content-Type: application/json" \
 -d '{
