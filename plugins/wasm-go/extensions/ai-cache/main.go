@@ -356,114 +356,49 @@ func ConstructAskLLMParameters(c PluginConfig, ctx wrapper.HttpContext, log wrap
 	return url, requestBody, header
 }
 
-// func ConstructAskLLMParametersOpenai(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, jsonSchema map[string]interface{}) (string, []byte, [][2]string) {
-// 	url := "/v1/chat/completions"
+func ConstructAskLLMParametersOpenai(c PluginConfig, ctx wrapper.HttpContext, log wrapper.Log, content string, jsonSchema map[string]interface{}) (string, []byte, [][2]string) {
+	url := "/v1/chat/completions"
 
-// 	// 将 jsonSchema 转换为 JSON 字符串
-// 	jsonSchemaStr, err := json.Marshal(jsonSchema)
-// 	if err != nil {
-// 		// 处理 JSON 序列化错误
-// 		log.Infof("JSON Schema 序列化错误: %v\n", err)
-// 		jsonSchemaStr = []byte("")
-// 	}
-// 	messages := []map[string]string{
-// 		{
-// 			"role": "system",
-// 			"content": `
-// 			假设你是一个初学者，要学习Higress, 你提了一些问题，但是有些问题可能是同一个问题，只是表达方式不同。但是一定要注意问题的主语和动词之间的细微区别！！！比如Higress控制台和Higress的Gateway不是同一个东西，不能视作等价问题！！！
-// 			前提：
-// 			正例:
-// 			"打开配置"和"启用配置"是一个意思。
-// 			"激活 Higress 控制台的监控聚合？" 和 “为 Higress Console 启用监控聚合？” 是一个意思！！！
-// 			"设置"和"指定"是一个意思。
-// 			配置管理器 和 设置管理器 是一个意思。
-// 			配置证书管理器 和 设置证书管理器 是一个意思。
-// 			用最简短的一句话概述怎么激活 Higress 控制台的监控聚合？和用最简短的一句话概述如何为 Higress Console 启用监控聚合？是一个意思！！！
-// 			用最简短的一句话概述怎么激活 Higress 控制台的监控聚合？和用最简短的一句话概述如何为 Higress Console 启用监控聚合？是一个意思 !!!
-// 			用最简短的一句话概述怎么激活 Higress 控制台的监控聚合？和用最简短的一句话概述如何为 Higress Console 启用监控聚合？是一个意思！！！
-// 			用最简短的一句话概述怎么给 Higress 控制台设定重启策略？和用最简短的一句话概述如何为 Higress Console 设置 restartPolicy？是一个意思！！！
-// 			用最简短的一句话概述Higress 的全局资源限制怎么设定？和 用最简短的一句话概述如何在 Higress 中设置全局资源限定符？是一个意思！！！
-// 			“配置 ImagePullSecrets”和“添加 ImagePullSecrets”是一个意思，
-// 			用最简短的一句话概述怎么在 Higress 中激活 RootNamespace？和用最简短的一句话概述如何在 Higress 中启用 RootNamespace？是一个意思！！！
-// 			用最简短的一句话概述Higress 的 Pilot 代号怎么设定？和用最简短的一句话概述如何为 Higress 设置 Pilot 的代号？是一个意思！！！
-// 			token有效期和时间限制是一个意思.
-// 			用最简洁的一句话概述如何在 Windows 上启用 kind 集群以及创建一个名为 cluster.conf 的 K8s 集群配置文件？和 用最简短的一句话概述如何创建一个名为 cluster.conf 的 K8s 集群配置文件？不是一个意思！！！
-// 			用最简短的一句话概述如何设置 Higress Controller 监听的命名空间？和 用最简短的一句话概述如何为 Higress 设置指定的命名空间？不是一个意思！！！
-// 			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-// 			用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 和 用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？ 是一个意思！！！
-// 			用最简短的一句话概述在 Higress 控制台怎么创建服务？和用最简短的一句话概述如何在 Higress 控制台中创建服务？是一个意思！！！
-// 			反例:
-// 			"JWT Token "只属于一种token，不等同于"token"。
-// 			用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？和用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress Console 启用 Certmanager？和用最简短的一句话概述如何为 Higress Console 设置证书管理器？不是一个意思！！！
-// 			用最简短的一句话概述如何访问 Higress 控制台？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-// 			用最简短的一句话概述如何访问 Higress 控制台？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-// 			用最简短的一句话概述在 Higress 控制台首次访问时需要做什么？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-// 			用最简短的一句话概述在 Higress 控制台首次访问时需要做什么？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-// 			用最简短的一句话概述在 Higress 控制台首次访问时需要做什么？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress Console 添加 ImagePullSecrets？和用最简短的一句话概述如何增加 Higress Console 的存储类大小？不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？和用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？不是一个意思！！！
-// 			用最简短的一句话概述如何访问 Higress 控制台？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-// 			JWT Token 和 token 不是一个意思，不能直接替换。
-// 			RootNamespace 和 命令空间不是一个意思。
-// 			用最简短的一句话概述如何在 Higress 中启用 Istio 资源监听？ 和用最简短的一句话概述如何启用 Higress 的 IstioAPI 支持？不是一个意思！！！
-// 			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-// 			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-// 			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-// 			"启用 Certmanager？" 和 "设置证书管理器？" 不是一个意思！！！
-// 			"Higress 设置指定的命名空间？" 和 “Higress Controller 监听的命名空间？” 不是一个意思！！！
-// 			"Pod 自动缩放" 和 “Gateway 自动缩放” 不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-// 			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和 用最简短的一句话概述如何安装 Higress 并指定本地安装？不是一个意思！！！
-// 			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和 用最简短的一句话概述如何安装 Higress 并指定本地安装？不是一个意思！！！
-// 			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-// 			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-// 			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-// 			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中启用 Prometheus 集群配置？和 用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？ 不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中启用 Prometheus 集群配置？和 用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？ 不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-// 			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-// 			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-// 			如果问你用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 请回答No！！！
-// 			如果问你用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 请回答No！！！
-// 			如果问你用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 请回答No！！！
-// 			如果问你用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 请回答No！！！
-// 			`,
-// 		},
-// 		{
-// 			"role":    "user",
-// 			"content": content,
-// 		},
-// 	}
-// 	requestData := map[string]interface{}{
-// 		"model":    "gpt-4o-2024-08-06",
-// 		"messages": messages,
-// 	}
-// 	if len(jsonSchemaStr) > 0 {
-// 		requestData["response_format"] = jsonSchema
-// 	}
+	// 将 jsonSchema 转换为 JSON 字符串
+	jsonSchemaStr, err := json.Marshal(jsonSchema)
+	if err != nil {
+		// 处理 JSON 序列化错误
+		log.Infof("JSON Schema 序列化错误: %v\n", err)
+		jsonSchemaStr = []byte("")
+	}
+	messages := []map[string]string{
+		{
+			"role": "system",
+			"content": `
+			假设你是一个初学者，要学习Higress, 你提了一些问题，但是有些问题可能是同一个问题，只是表达方式不同。但是一定要注意问题的主语和动词之间的细微区别！！！比如Higress控制台和Higress的Gateway不是同一个东西，不能视作等价问题！！！
+			前提：
+			正例:
+			`,
+		},
+		{
+			"role":    "user",
+			"content": content,
+		},
+	}
+	requestData := map[string]interface{}{
+		"model":    "gpt-4o-2024-08-06",
+		"messages": messages,
+	}
+	if len(jsonSchemaStr) > 0 {
+		requestData["response_format"] = jsonSchema
+	}
 
-// 	requestBody, err := json.Marshal(requestData)
-// 	if err != nil {
-// 		log.Errorf("Failed to marshal request data: %v", err)
-// 	}
+	requestBody, err := json.Marshal(requestData)
+	if err != nil {
+		log.Errorf("Failed to marshal request data: %v", err)
+	}
 
-// 	header := [][2]string{
-// 		{"Content-Type", "application/json"},
-// 		{"Authorization", "Bearer " + c.OpenaiInfo.OpenaiKey},
-// 	}
-// 	return url, requestBody, header
-// }
+	header := [][2]string{
+		{"Content-Type", "application/json"},
+		{"Authorization", "Bearer " + c.OpenaiInfo.OpenaiKey},
+	}
+	return url, requestBody, header
+}
 
 // Function to parse the JSON response and return the content
 func ParseChatCompletionResponse(jsonData []byte) (string, error) {
@@ -1017,82 +952,15 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 			正例:
 			"打开配置"和"启用配置"是一个意思。
 			"激活 Higress 控制台的监控聚合？" 和 “为 Higress Console 启用监控聚合？” 是一个意思！！！
-			"设置"和"指定"是一个意思。
-			配置管理器 和 设置管理器 是一个意思。
-			配置证书管理器 和 设置证书管理器 是一个意思。
-			用最简短的一句话概述怎么激活 Higress 控制台的监控聚合？和用最简短的一句话概述如何为 Higress Console 启用监控聚合？是一个意思！！！
-			用最简短的一句话概述怎么激活 Higress 控制台的监控聚合？和用最简短的一句话概述如何为 Higress Console 启用监控聚合？是一个意思 !!!
-			用最简短的一句话概述怎么激活 Higress 控制台的监控聚合？和用最简短的一句话概述如何为 Higress Console 启用监控聚合？是一个意思！！！
-			用最简短的一句话概述怎么给 Higress 控制台设定重启策略？和用最简短的一句话概述如何为 Higress Console 设置 restartPolicy？是一个意思！！！
-			用最简短的一句话概述Higress 的全局资源限制怎么设定？和 用最简短的一句话概述如何在 Higress 中设置全局资源限定符？是一个意思！！！
-			“配置 ImagePullSecrets”和“添加 ImagePullSecrets”是一个意思，
-			用最简短的一句话概述怎么在 Higress 中激活 RootNamespace？和用最简短的一句话概述如何在 Higress 中启用 RootNamespace？是一个意思！！！
-			用最简短的一句话概述Higress 的 Pilot 代号怎么设定？和用最简短的一句话概述如何为 Higress 设置 Pilot 的代号？是一个意思！！！
-			token有效期和时间限制是一个意思.
-			用最简短的一句话概述如何在 Higress 中打开 Prometheus 集群配置？ 和 用最简短的一句话概述如何在 Higress 中启用 Prometheus 集群配置？ 是一个意思!!!
-			用最简短的一句话概述如何在 Higress 中打开 Prometheus 集群配置？ 和 用最简短的一句话概述如何在 Higress 中启用 Prometheus 集群配置？ 是一个意思!!!
-			用最简洁的一句话概述如何在 Windows 上启用 kind 集群以及创建一个名为 cluster.conf 的 K8s 集群配置文件？和 用最简短的一句话概述如何创建一个名为 cluster.conf 的 K8s 集群配置文件？不是一个意思！！！
-			用最简短的一句话概述如何设置 Higress Controller 监听的命名空间？和 用最简短的一句话概述如何为 Higress 设置指定的命名空间？不是一个意思！！！
-			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-			用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 和 用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？ 是一个意思！！！
-			用最简短的一句话概述在 Higress 控制台怎么创建服务？和用最简短的一句话概述如何在 Higress 控制台中创建服务？是一个意思！！！
 			反例:
 			"JWT Token "只属于一种token，不等同于"token"。
-			用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？和用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？不是一个意思！！！
-			用最简短的一句话概述如何为 Higress Console 启用 Certmanager？和用最简短的一句话概述如何为 Higress Console 设置证书管理器？不是一个意思！！！
-			用最简短的一句话概述如何访问 Higress 控制台？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-			用最简短的一句话概述如何访问 Higress 控制台？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-			用最简短的一句话概述在 Higress 控制台首次访问时需要做什么？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-			用最简短的一句话概述在 Higress 控制台首次访问时需要做什么？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-			用最简短的一句话概述在 Higress 控制台首次访问时需要做什么？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-			用最简短的一句话概述如何为 Higress Console 添加 ImagePullSecrets？和用最简短的一句话概述如何增加 Higress Console 的存储类大小？不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？和用最简短的一句话概述如何为 Higress 设置 token 颁发的时间限制？不是一个意思！！！
-			用最简短的一句话概述如何访问 Higress 控制台？和用最简短的一句话概述如何启动 Higress 控制台？不是一个意思！！！
-			用最简短的一句话概述怎么为 Higress 控制台配置证书管理？和用最简短的一句话概述如何为 Higress Console 设置证书管理器？是一个意思！！！
-			JWT Token 和 token 不是一个意思，不能直接替换。
-			RootNamespace 和 命令空间不是一个意思。
-			用最简短的一句话概述如何在 Higress 中启用 Istio 资源监听？ 和用最简短的一句话概述如何启用 Higress 的 IstioAPI 支持？不是一个意思！！！
-			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-			用最简短的一句话概述如何通过 Helm 指定 Higress Console 的资源请求？和用最简短的一句话概述如何通过 Helm 安装 Higress？不是一个意思！！！
-			"启用 Certmanager？" 和 "设置证书管理器？" 不是一个意思！！！
-			"Higress 设置指定的命名空间？" 和 “Higress Controller 监听的命名空间？” 不是一个意思！！！
-			"Pod 自动缩放" 和 “Gateway 自动缩放” 不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？ 和 用最简短的一句话概述如何在 Higress 中设置 loadBalancerIP？ 不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和 用最简短的一句话概述如何安装 Higress 并指定本地安装？不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和 用最简短的一句话概述如何安装 Higress 并指定本地安装？不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和 用最简短的一句话概述如何安装 Higress 并指定本地安装？不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和 用最简短的一句话概述如何安装 Higress 并指定本地安装？不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中启用 Prometheus 集群配置？和 用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？ 不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-			用最简短的一句话概述如何安装 Higress 并启用观察性套件？和用最简短的一句话概述如何通过 Helm 启用 Higress 的可观测性套件（Grafana + Prometheus） ？不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中启用 Prometheus 集群配置？和 用最简短的一句话概述如何在 Higress 中启用 Prometheus 合并？ 不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-			用最简短的一句话概述如何为 Higress 设置静态 IP 配置？和用最简短的一句话概述如何在 Higress 网关添加静态入口的 DNS 配置？不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述如何在 Higress 中设置 JWT Token 过期时间？ 和 用最简短的一句话概述怎么配置 Higress 的 token 有效期？ 不是一个意思！！！
-			用最简短的一句话概述怎么给 Higress 配置高可用性？ 和 用最简短的一句话概述如何在 Higress 中启用高可用配置？ 不是一个意思!!!
-			用最简短的一句话概述怎么给 Higress 配置高可用性？ 和 用最简短的一句话概述如何在 Higress 中启用高可用配置？ 不是一个意思!!!
-			用最简短的一句话概述怎么给 Higress 配置高可用性？ 和 用最简短的一句话概述如何在 Higress 中启用高可用配置？ 不是一个意思!!!
 
 	问题1: “%s”,
 	问题2: “%s”,
 
-	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！ JWT Token过期时间和token有效期不相似,回答是No!!!
-	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！ JWT Token过期时间和token有效期不相似,回答是No!!!
-	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！ JWT Token过期时间和token有效期不相似,回答是No!!!
+	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
+	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
+	根据以上前提，问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！
 
 	根据以上前提,问题1和问题2想要得到的回答的答案是相同的吗？只说Yes或No，其他任何都不要显示！！！`,
 		key1, key2)
@@ -1116,9 +984,6 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 			if strings.Contains(strings.ToLower(queryAns), "no") {
 				keyMatch = false
 			}
-			if strings.Contains(key1, "Higress 中设置 JWT Token 过期时间？") {
-				keyMatch = false
-			}
 			if keyMatch && key2List.score[index] < 10000 {
 				config.LogData.CacheType = 4
 				config.LogData.FinalChatQuery = key2
@@ -1134,136 +999,109 @@ func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log
 	)
 }
 
-// func askLLMForRank(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, key1 string, key2List queryList, index int, textEmbedding []float64) {
-// 	// log.Infof("len(key2List):%d, index:%d", len(key2List.key), index)
-// 	if index == len(key2List.key) {
-// 		log.Warnf("no key match, exit, cacheType:-3")
-// 		config.LogData.CacheType = -3
-// 		uploadQueryEmbedding(ctx, config, log, key1, textEmbedding)
-// 		// logAndResume(ctx, config, log)
-// 		return
-// 	}
+func askLLMForRankOpenai(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, key1 string, key2List queryList, index int, textEmbedding []float64) {
+	// log.Infof("len(key2List):%d, index:%d", len(key2List.key), index)
+	if index == len(key2List.key) {
+		log.Warnf("no key match, exit, cacheType:-3")
+		config.LogData.CacheType = -3
+		uploadQueryEmbedding(ctx, config, log, key1, textEmbedding)
+		// logAndResume(ctx, config, log)
+		return
+	}
 
-// 	key2 := key2List.key[index]
-// 	config.LogData.KeyQueryString = key2
-// 	config.LogData.KeyChatID = key2List.chatId[index]
-// 	config.LogData.KeyQueryScore = key2List.score[index]
+	key2 := key2List.key[index]
+	config.LogData.KeyQueryString = key2
+	config.LogData.KeyChatID = key2List.chatId[index]
+	config.LogData.KeyQueryScore = key2List.score[index]
 
-// 	// 创建一个字符串来存储索引和值
-// 	var sb strings.Builder
-// 	for i, val := range key2List.query {
-// 		sb.WriteString(fmt.Sprintf("index %d: %s, ", i, val))
-// 	}
-// 	// 去掉最后一个多余的逗号和空格
-// 	queryList := strings.TrimSuffix(sb.String(), ", ")
+	// 创建一个字符串来存储索引和值
+	var sb strings.Builder
+	for i, val := range key2List.query {
+		sb.WriteString(fmt.Sprintf("index %d: %s, ", i, val))
+	}
+	// 去掉最后一个多余的逗号和空格
+	queryList := strings.TrimSuffix(sb.String(), ", ")
 
-// 	content := fmt.Sprintf(
-// 		`给定一个查询问题 %s 和一组候选问题列表 %s，我们想知道查询问题的回答是否能在候选问题的回答中找到完全相同的表述（请谨慎选择，必须是两个回答会字面上一模一样的才能用于选择!）。请返回满足条件的候选问题的序号（从0开始计数）。如果有多个候选问题和查询问题相同，返回序号较小的那个。如果所有问题都不同，请返回 -1。`, key1, queryList)
+	content := fmt.Sprintf(
+		`给定一个查询问题 %s 和一组候选问题列表 %s，我们想知道查询问题的回答是否能在候选问题的回答中找到完全相同的表述（请谨慎选择，必须是两个回答会字面上一模一样的才能用于选择!）。请返回满足条件的候选问题的序号（从0开始计数）。如果有多个候选问题和查询问题相同，返回序号较小的那个。如果所有问题都不同，请返回 -1。`, key1, queryList)
 
-// 	// 动态计算 maximum 值
-// 	// maximumValue := len(key2List.query) - 1
+	jsonSchema := map[string]interface{}{
+		"type": "json_schema",
+		"json_schema": map[string]interface{}{
+			"name":   "AskLLMForRank",
+			"strict": true,
+			"schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"reasonList": map[string]interface{}{
+						"type": "array",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"reason": map[string]interface{}{
+									"type":        "string",
+									"description": "选或者不选的理由，请分析问题中面向的主语和动词，仔细判断他们的区别，确定是否是完全一致的。注意是完全一致！！！",
+								},
+								"isAnswer": map[string]interface{}{
+									"type":        "boolean",
+									"description": "判断该理由是否为最终答案。",
+								},
+							},
+							"required":             []string{"reason", "isAnswer"},
+							"additionalProperties": false, // 添加这一行
+						},
+						"description": "选或者不选的理由列表，每个元素是一个包含理由（字符串）和答案判断（布尔值）的对象。",
+					},
+					"finalAnswer": map[string]interface{}{
+						"type":        "integer",
+						"description": "最终的答案，必须为 -1 到 reasonList 的最大索引之间的整数。",
+					},
+				},
+				"required":             []string{"reasonList", "finalAnswer"},
+				"additionalProperties": false,
+			},
+		},
+	}
 
-// 	// jsonSchema := map[string]interface{}{
-// 	// 	"type": "json_schema",
-// 	// 	"json_schema": map[string]interface{}{
-// 	// 		"name":   "AskLLMForRank",
-// 	// 		"strict": true,
-// 	// 		"schema": map[string]interface{}{
-// 	// 			"type": "object",
-// 	// 			"properties": map[string]interface{}{
-// 	// 				"reasonList": map[string]interface{}{
-// 	// 					"type":        "array",
-// 	// 					"items":       map[string]interface{}{"type": "string"},
-// 	// 					"description": "选或者不选的理由列表，请分析问题中面向的主语和动词，仔细判断他们的区别，确定是否是一致的。每个元素是一个字符串, 注意按照提问的顺序来填写",
-// 	// 				},
-// 	// 				"finalAnswer": map[string]interface{}{
-// 	// 					"type":        "integer",
-// 	// 					"description": "最终的答案，必须为-1到reasonList的最大索引之间的整数",
-// 	// 				},
-// 	// 			},
-// 	// 			"required":             []string{"reasonList", "finalAnswer"},
-// 	// 			"additionalProperties": false,
-// 	// 		},
-// 	// 	},
-// 	// }
-
-// 	jsonSchema := map[string]interface{}{
-// 		"type": "json_schema",
-// 		"json_schema": map[string]interface{}{
-// 			"name":   "AskLLMForRank",
-// 			"strict": true,
-// 			"schema": map[string]interface{}{
-// 				"type": "object",
-// 				"properties": map[string]interface{}{
-// 					"reasonList": map[string]interface{}{
-// 						"type": "array",
-// 						"items": map[string]interface{}{
-// 							"type": "object",
-// 							"properties": map[string]interface{}{
-// 								"reason": map[string]interface{}{
-// 									"type":        "string",
-// 									"description": "选或者不选的理由，请分析问题中面向的主语和动词，仔细判断他们的区别，确定是否是完全一致的。注意是完全一致！！！",
-// 								},
-// 								"isAnswer": map[string]interface{}{
-// 									"type":        "boolean",
-// 									"description": "判断该理由是否为最终答案。",
-// 								},
-// 							},
-// 							"required":             []string{"reason", "isAnswer"},
-// 							"additionalProperties": false, // 添加这一行
-// 						},
-// 						"description": "选或者不选的理由列表，每个元素是一个包含理由（字符串）和答案判断（布尔值）的对象。",
-// 					},
-// 					"finalAnswer": map[string]interface{}{
-// 						"type":        "integer",
-// 						"description": "最终的答案，必须为 -1 到 reasonList 的最大索引之间的整数。",
-// 					},
-// 				},
-// 				"required":             []string{"reasonList", "finalAnswer"},
-// 				"additionalProperties": false,
-// 			},
-// 		},
-// 	}
-
-// 	url, requestBody, header := ConstructAskLLMParametersOpenai(config, ctx, log, content, jsonSchema)
-// 	config.OpenaiInfo.OpenaiClient.Post(
-// 		url,
-// 		header,
-// 		requestBody,
-// 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-// 			// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-// 			queryAns, reasonList, err := ParseChatCompletionResponseOpenai(responseBody, log)
-// 			log.Infof("statusCode:%d, queryAns:%d, reasonList:%v", statusCode, queryAns, reasonList)
-// 			config.LogData.QueryReasonList = reasonList
-// 			if err != nil {
-// 				log.Errorf("Failed to parse response: %v", err)
-// 				logAndResume(ctx, config, log)
-// 				return
-// 			}
-// 			keyMatch := false
-// 			index := 0
-// 			if queryAns == -1 || queryAns >= len(key2List.query) {
-// 				keyMatch = false
-// 			} else {
-// 				keyMatch = true
-// 				index = queryAns
-// 			}
-// 			if keyMatch && key2List.score[index] < 10000 {
-// 				config.LogData.CacheType = 4
-// 				config.LogData.FinalChatQuery = key2
-// 				config.LogData.GetChatID = config.LogData.KeyChatID
-// 				ctx.SetContext(CacheKeyContextKey, nil)
-// 				redisSearchHandler(key2, ctx, config, log, false, false)
-// 				// logAndReturn(config, log, false, key2)
-// 			} else {
-// 				log.Warnf("no key match, exit, cacheType:-3")
-// 				config.LogData.CacheType = -3
-// 				uploadQueryEmbedding(ctx, config, log, key1, textEmbedding)
-// 			}
-// 		},
-// 		100000,
-// 	)
-// }
+	url, requestBody, header := ConstructAskLLMParametersOpenai(config, ctx, log, content, jsonSchema)
+	config.OpenaiInfo.OpenaiClient.Post(
+		url,
+		header,
+		requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			queryAns, reasonList, err := ParseChatCompletionResponseOpenai(responseBody, log)
+			log.Infof("statusCode:%d, queryAns:%d, reasonList:%v", statusCode, queryAns, reasonList)
+			config.LogData.QueryReasonList = reasonList
+			if err != nil {
+				log.Errorf("Failed to parse response: %v", err)
+				logAndResume(ctx, config, log)
+				return
+			}
+			keyMatch := false
+			index := 0
+			if queryAns == -1 || queryAns >= len(key2List.query) {
+				keyMatch = false
+			} else {
+				keyMatch = true
+				index = queryAns
+			}
+			if keyMatch && key2List.score[index] < 10000 {
+				config.LogData.CacheType = 4
+				config.LogData.FinalChatQuery = key2
+				config.LogData.GetChatID = config.LogData.KeyChatID
+				ctx.SetContext(CacheKeyContextKey, nil)
+				redisSearchHandler(key2, ctx, config, log, false, false)
+				// logAndReturn(config, log, false, key2)
+			} else {
+				log.Warnf("no key match, exit, cacheType:-3")
+				config.LogData.CacheType = -3
+				uploadQueryEmbedding(ctx, config, log, key1, textEmbedding)
+			}
+		},
+		100000,
+	)
+}
 
 // 调用向量搜索接口搜索最相似的key，搜索成功后调用redisSearchHandler函数获取最相似的key的结果
 func performQueryAndRespond(key string, text_embedding []float64, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, stream bool) {
