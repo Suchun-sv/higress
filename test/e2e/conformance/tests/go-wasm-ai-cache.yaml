@@ -57,31 +57,46 @@ metadata:
   name: ai-cache
   namespace: higress-system
 spec:
-  priority: 200
+  priority: 400
+  matchRules:
+    - config:
+        embedding:
+          type: "dashscope"
+          serviceName: "qwen"
+          apiKey: "{{Github.QwenApiKey}}"
+          timeout: 12000
+        vector:
+          type: "dashvector"
+          serviceName: "dashvector"
+          collectionID: "higress_1536"
+          serviceDomain: "vrs-cn-o493v7kvt0003p.dashvector.cn-hangzhou.aliyuncs.com"
+          apiKey: "sk-5tlKDokFLpEFOdbU50RID3vK9uKXX016C89032FDE11EFBEA28E63D596A0CE"
+          timeout: 12000
+        cache:
+
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-cache-openai
+        - higress-conformance-infra/wasmplugin-ai-cache-qwen
+  url: file:///opt/plugins/wasm-go/extensions/ai-cache/plugin.wasm
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-proxy
+  namespace: higress-system
+spec:
+  priority: 201
   matchRules:
     - config:
         provider:
-          type: "openai"
-          customSettings:
-            - name: "max_tokens"
-              value: 123
-              overwrite: false
-            - name: "temperature"
-              value: 0.66
-              overwrite: true
+          type: "qwen"
+          qwenEnableCompatible: true
+          apiTokens: 
+            - "sk-6cceb20f83cd4b889f9305d0d6abc39a"
+          timeout: 1200000
+          modelMapping:
+            "*": "qwen-long"
       ingress:
         - higress-conformance-infra/wasmplugin-ai-cache-openai
-    - config:
-        provider:
-          type: "qwen"
-          apiTokens: "${{secrets.ai-cache-qwen-token}}"
-          customSettings:
-            - name: "max_tokens"
-              value: 123
-              overwrite: false
-            - name: "temperature"
-              value: 0.66
-              overwrite: true
-      ingress:
         - higress-conformance-infra/wasmplugin-ai-cache-qwen
-  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-cache:1.0.0
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:1.0.0

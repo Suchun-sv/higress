@@ -34,16 +34,16 @@ var WasmPluginsAiCache = suite.ConformanceTest{
 		testcases := []http.Assertion{
 			{
 				Meta: http.AssertionMeta{
-						TestCaseName:    "case 1: no-cache",
-						TargetBackend:   "infra-backend-v1",
-						TargetNamespace: "higress-conformance-infra",
+					TestCaseName:    "case 1: openai",
+					TargetBackend:   "infra-backend-v1",
+					TargetNamespace: "higress-conformance-infra",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
-						Host:        "openai.ai.com",
-						Path:        "/v1/chat/completions",
-						Method:      "POST",
-						ContentType: http.ContentTypeApplicationJson,
+						Host:             "openai.ai.com",
+						Path:             "/v1/chat/completions",
+						Method:"POST",
+						ContentType:      http.ContentTypeApplicationJson,
 						Body: []byte(`{
 							"model": "gpt-3",
                             "messages": [{"role":"user","content":"hi"}]}`),
@@ -76,10 +76,10 @@ var WasmPluginsAiCache = suite.ConformanceTest{
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
-						Host:        "qwen.ai.com",
-						Path:        "/v1/chat/completions",
-						Method:      "POST",
-						ContentType: http.ContentTypeApplicationJson,
+						Host:             "qwen.ai.com",
+						Path:             "/v1/chat/completions",
+						Method:"POST",
+						ContentType:      http.ContentTypeApplicationJson,
 						Body: []byte(`{
 							"model": "qwen-long",
 							"input": {"messages": [{"role":"user","content":"hi"}]},
@@ -104,6 +104,7 @@ var WasmPluginsAiCache = suite.ConformanceTest{
 					},
 				},
 			},
+			
 		}
 		t.Run("WasmPlugins ai-cache", func(t *testing.T) {
 			for _, testcase := range testcases {
