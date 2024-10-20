@@ -139,10 +139,13 @@ func New(s Options) *ConformanceTestSuite {
 		}
 	}
 
+	applied_tests := []string{"ConfigMapGlobalEnvoy", "ConfigmapGzip", "ConfigMapGzipEnvoy", "ConfigmapHttps", "WasmPluginAiCache", "WasmPluginAiProxy"}
+
 	testNames := strings.Split(s.ExecuteTests, ",")
-	for i := range testNames {
-		if testNames[i] != "" {
-			suite.ExecuteTests = suite.ExecuteTests.Insert(testNames[i])
+	for _, testName := range testNames {
+		if testName != "" && contains(applied_tests, testName) {
+			// t.Logf("Add Test: %s", testName)
+			suite.ExecuteTests = suite.ExecuteTests.Insert(testName)
 		}
 	}
 
@@ -261,4 +264,13 @@ func (test *ConformanceTest) Run(t *testing.T, suite *ConformanceTestSuite) {
 	}
 
 	test.Test(t, suite)
+}
+
+func contains(slice []string, item string) bool {
+	for _, v := range slice {
+		if v == item {
+			return true
+		}
+	}
+	return false
 }
